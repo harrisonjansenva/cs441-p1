@@ -22,7 +22,7 @@ You have 64 opcode slots and have planned to fill all 64. But the deliverables r
 
 Every instruction you define is a line of assembly you must write *and* a result you must be able to justify. 64 instructions means 64 hand-verified outcomes — including `CNTL0`, `CNTT0`, `POP`, `BITR`, `BYTR`, and saturating add. You also owe RTL (40 pts) and a format diagram (40 pts) for each one.
 
-**Instruction count is a liability in this project, not a feature.** Target **~40 instructions**, with a second tier you add only if someone volunteers to write the benchmark lines and expected results for them. This single reframing justifies most of what follows.
+**Instruction count is a liability in this project, not a feature.** Target **~40 instructions**, with anything beyond that added only if someone volunteers to write the benchmark lines and expected results for it (§2.5). This single reframing justifies most of what follows.
 
 ## 2. Addressing granularity — the one decision to settle before anything else
 
@@ -140,16 +140,19 @@ Also unspecified anywhere, and all needed for a correct simulator:
 
 ## 5. Are 6 opcode bits the right number?
 
-Yes — but use them as a **primary** opcode with a `funct` escape, not as 64 flat values.
+Yes, and keeping a `funct` field is the right call. Use the 6 bits as a **primary** opcode with a `funct` escape for the register-register instructions, not as a flat list of 40.
 
-With a 32-bit instruction and 5-bit register fields, a register-register op needs `6 + 5 + 5 + 5 = 21` bits, leaving **11 bits dead** in every R-type instruction. A flat 6-bit opcode burns scarce primary opcodes on instructions that have 11 bits of unused space sitting right there.
+With 5-bit register fields, a register-register op needs `6 + 5 + 5 + 5 = 21` bits, leaving **11 bits free** in every R-type instruction. Spending primary opcodes on instructions that have 11 unused bits sitting right there is wasteful.
 
-Instead, let a few primary opcodes escape into a 6-bit `funct` field at bits `[5:0]`:
+- **Three escapes** (`R-ALU`, `R-FP`, `R-OTHER`) carry about 24 register-register operations through `funct`. A flat design would spend 24 primary opcodes on them; this spends 3.
+- The whole ISA then uses about **18 of the 64** primary opcodes, leaving the rest reserved.
+- `funct` does **not** reduce the instruction count. It reduces how much *opcode space* the instructions consume, and makes adding a later R-type instruction cost one `funct` value instead of one primary opcode.
 
-- `R-ALU`, `R-FP`, `R-BIT`, `SYS` consume **4 primary opcodes** and give you **4 × 64 = 256** register-register operations.
-- The remaining 60 primary opcodes go to the instructions that genuinely need the bits: I-type (16-bit immediate) and J-type (26-bit target).
+**Why keep 6 opcode bits when ~18 would fit in 5.** The spare bit is encoding freedom, not decode speed. It lets opcodes be assigned so class and format fall out of a 2–3-bit prefix, so the ALU control can be shared between R-type and I-type, and so there are reserved codes to move an opcode later if a datapath project shows a control signal on the critical path. It costs nothing, because the I and J formats are already fixed by their 16- and 26-bit fields.
 
-This is how both MIPS and RISC-V do it, and it directly serves the professor's framing — the merged design is "few opcode bits" at the primary level and "many opcode bits" via `funct`. It is also **minimal churn**: your existing class blocks survive, they just move from primary-opcode ranges into funct ranges.
+**Honest cost of `funct`:** R-type decode is two steps (opcode picks the class, then `funct` picks the operation) where a flat opcode is one. For the simulator that is trivial; in hardware it is a small extra lookup. Flat is marginally simpler to decode and harder to extend. For this project's goals (extensible, easy to group, designed to be reworked into a datapath later), `funct` is the better trade.
+
+It also lets the existing class blocks survive: they move from primary-opcode ranges into `funct` spaces, so each owner keeps a block (see §2.3).
 
 ## 6. Clean up the register file definition
 
@@ -165,13 +168,13 @@ This is how both MIPS and RISC-V do it, and it directly serves the professor's f
 **(a) Share one 32-entry register file between integer and FP.** FP instructions interpret the 32 bits they read as IEEE-754 binary32. Consequences: no second register file in the simulator, no `FMV` instructions, `LW`/`SW` move floats with no `FLW`/`FSW`, and the FP MAXFINDER becomes the integer MAXFINDER with four mnemonics changed.
 *Honest trade:* real ISAs split the files for register-port and bandwidth reasons, and because FP registers are often wider than GPRs. Say so in the spec — a stated trade-off scores better than an unexamined one.
 
-**(b) FP compares write an integer register, not a flag.** `FLT.S rd, rs1, rs2` → `R(rd) ← (R(rs1) <f R(rs2)) ? 1 : 0`, then branch with the **existing** `BNE rd, R0, L`. This is the RISC-V approach. The MIPS alternative (an FP condition-code bit plus `BC1T`/`BC1F`) adds hidden state and two more branch instructions to spec, implement, and cover.
+**(b) FP compares write an integer register, not a flag.** `FLT rd, rs1, rs2` → `R(rd) ← (R(rs1) <f R(rs2)) ? 1 : 0`, then branch with the **existing** `BNE rd, R0, L`. This is the RISC-V approach. The MIPS alternative (an FP condition-code bit plus `BC1T`/`BC1F`) adds hidden state and two more branch instructions to spec, implement, and cover.
 
 ## 8. One instruction worth *promoting* from the "Other" block
 
 `CONDMV` (conditional move) — `CMOV rd, rs1, rs2`: `if R(rs2) ≠ 0 then R(rd) ← R(rs1)`.
 
-This lets both MAXFINDERs be written **branchless**: compare, then conditionally move. That is a real, articulable modern-performance argument (no branch to mispredict in the inner loop) that you can write up in the spec, and it costs one instruction. Keep it; demote `BITR`/`BYTR`/`SADD`/`SSUB` to the optional tier.
+This lets both MAXFINDERs be written **branchless**: compare, then conditionally move. That is a real, articulable modern-performance argument (no branch to mispredict in the inner loop) that you can write up in the spec, and it costs one instruction. Keep it. Of the rest of the original "Other" block, the plan (§2.4) keeps `CNTL0`/`CNTT0`/`POP`/`BYTR`/`SEXTD` as a small R-OTHER set and drops `BITR`/`SADD`/`SSUB` to optional extras.
 
 ---
 
@@ -195,54 +198,160 @@ This lets both MAXFINDERs be written **branchless**: compare, then conditionally
 
 The **Memory**, **`.mem` header**, **Sequential PC**, **Branch target**, **Jump target**, and **Endianness** rows are the six that change if the team picks Option B. Everything else in Part 2 — register file, formats, opcode map, FP decisions — is identical either way. **§2.7** covers how sub-word data is handled under Option A; **§2.8** is the complete Option B delta.
 
-## 2.2 Instruction formats
-
-The invariant worth advertising in the spec: **bits `[20:16]` are always `rs1`/base, and bits `[25:21]` are always "the other register operand."** For R/I-type that second slot is the destination `rd`; for stores and branches there is no destination, so it holds a source. MIPS moves `rd` between R- and I-type — this layout does not. Name the store/branch carve-out explicitly as deliberate (RISC-V has the same one in its S- and B-types) so a grader doesn't find it as an inconsistency.
+## 2.2 Instruction formats — three layouts
 
 ```
          31    26 25   21 20   16 15   11 10    6 5     0
-R-type  | opcode |  rd   |  rs1  |  rs2  | shamt | funct |
-I-type  | opcode |  rd   |  rs1  |      imm16            |
-S-type  | opcode |  rs2  |  base |      imm16            |   value in [25:21]
-B-type  | opcode |  rs2  |  rs1  |     offset16          |   PC-relative, instrs
-J-type  | opcode |              target26                 |   absolute word addr
+R-type  | opcode |  rs1  |  rs2  |  rd   | shamt | funct |   register-register ops
+I-type  | opcode |  rs1  |  rt   |        imm16          |   ALU-imm, LW, SW, branches, JALR
+J-type  | opcode |              target26                 |   J, JAL: absolute word address
 ```
 
-## 2.3 Opcode map (primary, 6 bits at `[31:26]`)
+Field usage:
 
-Four escapes + I/S/B/J opcodes. Ownership is preserved — each member now owns a *funct space* or an *opcode range* instead of an arbitrary quota.
+- **R-type:** `rs1` and `rs2` are the sources, `rd` the destination. `shamt` holds the shift amount for constant shifts and the sign-bit position for `SEXTD`. `funct` selects the operation. Unused fields are **zero** and ignored.
+- **I-type:** `rs1` is the base or first source. `rt` is the *destination* for `ADDI`/`ANDI`/`ORI`/`XORI`/`SLTI`/`LUI`/`LW`/`JALR`, and a *source* for `SW` (the value stored) and the branches (the second compare operand). `imm16` is sign-extended, except for `ANDI`/`ORI`/`XORI`, which zero-extend; branch offsets count instructions: `PC ← PC + 1 + sext(imm16)`.
+- **J-type:** `PC ← target26`. `JAL` also writes `R(31) ← PC + 1`.
 
-| Opcode | Class | Owner |
+Stores and branches are not separate formats. They have the *same bit layout* as ALU-immediate; the only difference is whether `rt` is written or read, which is a register-write-enable control signal, not a different way of extracting fields. **The spec should say three formats, not five.**
+
+### Why `rs1`/`rs2` sit where they do
+
+The goal is that **both register-file read addresses are in the same bit positions in every format**: `rs1` is always `[25:21]`, and `rs2`/`rt` is always `[20:16]`. Both reads can start the instant the word arrives, with no mux in front of the register file.
+
+The one place a register address moves is the **write** address: `rd` is `[15:11]` in R-type but `rt` is `[20:16]` in I-type. That is a single mux, selected by "is this an R-type opcode?", on the write-back path, which is the least timing-critical place for it. This is the MIPS arrangement. The alternatives were worse:
+
+- Putting `rd` at the same place in R and I (`[25:21]`) puts the mux on the *read* address instead, because stores and branches would then need their second source at `[25:21]` but R-type has it at `[15:11]`.
+- RISC-V avoids every mux by scrambling the immediate bits across the word, which moves the complexity into immediate extraction and the assembler.
+
+Worked examples under this layout:
+
+| Instruction | Fields | Hex |
 |---|---|---|
-| `000000` | **R-ALU** → `funct[5:0]` | Piper |
-| `000001` | **R-FP** → `funct[5:0]` | Eldon |
-| `000010` | **R-BIT** → `funct[5:0]` | Harrison |
-| `000011` | **SYS** → `funct[5:0]` (`NOP`, `HALT`) | Harrison |
-| `001000`–`001111` | ALU-immediate (`ADDI`, `ANDI`, `ORI`, `XORI`, `SLTI`, `LUI`, +2 reserved) | Piper |
-| `010000`–`010111` | Load/Store (`LW`, `SW`, 6 reserved) | Zach |
-| `011000`–`011101` | Branches (`BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU`) | Brad |
-| `100000`–`100010` | Jumps (`J`, `JAL`, `JALR`) | Brad |
-| rest | reserved — **leave reserved** | — |
+| `ADD R3, R1, R2` | `000000` `00001` `00010` `00011` `00000` `000000` | `0x00221800` |
+| `ADDI R3, R1, 5` | `001000` `00001` `00011` `0000000000000101` | `0x20230005` |
+| `BEQ R1, R2, +3` | `011000` `00001` `00010` `0000000000000011` | `0x60220003` |
+| `SW R3, 4(R1)` | `010001` `00001` `00011` `0000000000000100` | `0x44230004` |
 
-`HALT` is `SYS` opcode `000011` with `funct = 111111`, defined in **one** place.
+These assume the example opcode values from the grouping in §2.3; they will change if the Oct 3 freeze numbers the classes differently, but the field positions will not.
 
-## 2.4 Tier 1 — ships in the Oct 5 spec (~41 instructions)
+## 2.3 Opcode map — grouping by class
 
-- **R-ALU (12):** `ADD` `SUB` `AND` `OR` `XOR` `NOR` `SLL` `SRL` `SRA` `SLT` `SLTU` `MUL`
-  (`SLL`/`SRL`/`SRA` take the shift amount from `shamt`, not a register — one fewer form to document)
-- **ALU-imm (6):** `ADDI` `ANDI` `ORI` `XORI` `SLTI` `LUI`
-- **Memory (2):** `LW rd, imm(rs1)` · `SW rs2, imm(rs1)`
-- **Branch (6):** `BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`
-- **Jump (3):** `J` `JAL` `JALR`
-- **R-BIT (1):** `CMOV`
-- **SYS (2):** `NOP` `HALT`
-- **R-FP (9):** `FADD` `FSUB` `FMUL` `FDIV` `FNEG` `FLT.S` `FEQ.S` `FCVT.W.S` `FCVT.S.W`
+The 6-bit opcode is split as `class[5:3] | op[2:0]`. The class bits identify the instruction family and (with the format column) tell the decoder the layout in a 2–3-bit compare, never a full 6-bit match. **Class membership below is the recommendation; the exact numbering inside each class and each `funct` space is frozen on Oct 3, not here.** `HALT` stays `111111`, as the team's header comment already said.
 
-## 2.5 Tier 2 — add only if an owner also writes its benchmark lines + expected results
+| `[5:3]` | Class | Members | Format | Owner |
+|---|---|---|---|---|
+| `000` | Register-register escapes (use `funct`) | `000000` **R-ALU**, `000001` **R-FP**, `000010` **R-OTHER** | R | Piper (ALU), Eldon (FP), Harrison (Other) |
+| `001` | ALU-immediate | `ADDI` `ANDI` `ORI` `XORI` `SLTI` `LUI` | I | Zach |
+| `010` | Memory | `LW` `SW` | I | Zach |
+| `011` | Branch | `BEQ` `BNE` `BLT` `BGE` | I | Brad |
+| `100` | Jump | `J` `JAL` (J-type), `JALR` (I-type) | J, I | Brad |
+| `101`, `110` | Reserved | **illegal instruction** — the simulator must error, never silently execute | — | — |
+| `111` | System | `111111` = `HALT` | — | Brad |
 
-`DIV` `REM` `SLTIU` `SLLV`/`SRLV`/`SRAV` `AUIPC` `FSQRT` `FABS` `FLE.S` `CLZ` `CTZ` `POPCNT` `BREV` `BSWAP` `SEXT.B` `SEXT.H` `SADD` `SSUB` `EXT`/`EXTS` (bit-field extract — see **§2.7**)
+### What lives in each `funct` space
 
-Under Option A, promote `SLLV`/`SRLV` to Tier 1 **if** any benchmark needs a runtime-variable shift or runtime-indexed byte extraction; the constant-`shamt` forms cannot express it.
+| Escape | `funct` members | Count |
+|---|---|---|
+| **R-ALU** | `ADD` `SUB` `AND` `OR` `XOR` `SLT` · `SLL` `SRL` `SRA` (shift by `shamt`) · `SLLV` `SRLV` `SRAV` (shift by `R(rs2)[4:0]`) | 12 |
+| **R-FP** | `FADD` `FSUB` `FMUL` `FLT` `FCVTWS` `FCVTSW` | 6 |
+| **R-OTHER** | `CMOV` `CNTL0` `CNTT0` `POP` `BYTR` `SEXTD` | 6 |
+
+### Numbering rules for the Oct 3 freeze
+
+These are constraints on the numbering, not the numbering itself:
+
+1. **Share ALU control between R-type and I-type.** Give the ALU a 3-bit `alu_op`. In R-type it is `funct[2:0]`; in ALU-immediate it is `opcode[2:0]`. The same value must mean the same operation in both, so one control path serves both:
+   `alu_op = (opcode == R-ALU) ? funct[2:0] : opcode[2:0]`
+
+   | `alu_op` | R-type | I-type |
+   |---|---|---|
+   | `000` | `ADD` | `ADDI` |
+   | `010` | `AND` | `ANDI` |
+   | `011` | `OR` | `ORI` |
+   | `100` | `XOR` | `XORI` |
+   | `101` | `SLT` | `SLTI` |
+   | `111` | — | `LUI` |
+
+   `SUB` takes the one remaining arithmetic value, with no immediate form (`ADDI` with a negative immediate covers it).
+2. **Shifts get their own `funct` sub-group**, with one bit of `funct` meaning "amount comes from a register rather than `shamt`."
+3. **Within a class, keep a single "is this a variant" bit** wherever possible, so unit-level decode is a bit test rather than a table.
+4. **Reserve, don't fill.** Unassigned opcodes and `funct` values stay reserved and illegal. The spare codes are what let the datapath projects later move a control-critical opcode without breaking everything else.
+
+### How the decoder reads it
+
+| Question | Answer | Cost |
+|---|---|---|
+| Which format? | `opcode[5:3]`: `000` → R, `100` → J or I, otherwise I | 3-bit compare |
+| Is it `HALT`? | `opcode == 111111` | one AND |
+| Is it a branch? | `opcode[5:3] == 011` | 3-bit compare |
+| Is it memory? | `opcode[5:3] == 010` | 3-bit compare |
+| Which unit executes an R-type? | `opcode[2:0]` (ALU / FP / Other) | 3 bits |
+| Which operation? | R-type → `funct`; everything else → `opcode[2:0]` | no re-encode |
+| Writes a register? | R, ALU-imm, `LW`, `JAL`, `JALR`: yes. `SW`, branches, `J`, `HALT`: no. | small table |
+| Write address | R-type → `[15:11]`; I-type → `[20:16]`; `JAL` → R31 | 1 mux, write side only |
+
+## 2.4 The instruction set — about 40, plus free pseudo-instructions
+
+| Class | Instructions | Count |
+|---|---|---|
+| R-ALU | `ADD` `SUB` `AND` `OR` `XOR` `SLT` `SLL` `SRL` `SRA` `SLLV` `SRLV` `SRAV` | 12 |
+| R-OTHER | `CMOV` `CNTL0` `CNTT0` `POP` `BYTR` `SEXTD` | 6 |
+| R-FP | `FADD` `FSUB` `FMUL` `FLT` `FCVTWS` `FCVTSW` | 6 |
+| ALU-immediate | `ADDI` `ANDI` `ORI` `XORI` `SLTI` `LUI` | 6 |
+| Memory | `LW` `SW` | 2 |
+| Branch | `BEQ` `BNE` `BLT` `BGE` | 4 |
+| Jump | `J` `JAL` `JALR` | 3 |
+| System | `HALT` | 1 |
+| | | **40** |
+
+### The "Other" set
+
+| Instruction | RTL | Why it is here |
+|---|---|---|
+| `CMOV rd, rs1, rs2` | `if R(rs2) ≠ 0 then R(rd) ← R(rs1)` | Makes both MAXFINDERs branchless: `SLT t, max, x` then `CMOV max, x, t` (the FP version swaps `SLT` for `FLT`) |
+| `CNTL0 rd, rs1` | `R(rd) ← number of leading zeros of R(rs1)` | Normalization and log2; one-value test (`0x00F00000` → 8) |
+| `CNTT0 rd, rs1` | `R(rd) ← number of trailing zeros of R(rs1)` | Finds the lowest set bit |
+| `POP rd, rs1` | `R(rd) ← number of 1 bits in R(rs1)` | Hardest of these to emulate in software |
+| `BYTR rd, rs1` | `R(rd) ← bytes of R(rs1) reversed` | Byte-order tool under word addressing (`0x11223344` → `0x44332211`) |
+| `SEXTD rd, rs1, shamt` | `R(rd) ← sext(R(rs1)[shamt:0])` | `shamt` is the sign-bit position: 7 = byte, 15 = halfword. One instruction covers both |
+
+`CNTL0`, `CNTT0`, `POP`, and `BYTR` are unary: `rs2` is unused (the assembler emits zeros, the decoder ignores it). `CNTL0` and `CNTT0` of zero return 32. `SEXTD` ignores `rs2` and uses `shamt` for the bit position.
+
+### Pseudo-instructions (free — not counted toward benchmark coverage)
+
+The handout requires the coverage benchmark to use every *instruction in the ISA*. An assembler alias that expands into real instructions is not an ISA instruction, so these add no hand-verification burden. They all ride on `R0` = 0:
+
+| Pseudo | Expands to |
+|---|---|
+| `NOP` | `ADD R0, R0, R0` |
+| `MOV rd, rs` | `ADD rd, rs, R0` |
+| `NEG rd, rs` | `SUB rd, R0, rs` |
+| `NOT rd, rs` | `SUB rd, R0, rs` then `ADDI rd, rd, -1` (`-x - 1`) |
+| `LI rd, small` | `ADDI rd, R0, small` |
+| `LI rd, big` | `LUI rd, hi` then `ORI rd, rd, lo` |
+| `BEQZ` / `BNEZ rs, L` | `BEQ` / `BNE rs, R0, L` |
+| `BGT` / `BLE a, b, L` | `BLT` / `BGE b, a, L` (swap operands) |
+| `JR rs` | `JALR R0, rs` |
+| `RET` | `JALR R0, R31` |
+
+`NOT` caveat worth stating in the spec: `XORI` zero-extends, so `XORI rd, rs, 0xFFFF` flips only the low 16 bits and is **not** a 32-bit NOT.
+
+### What was cut, and the workaround
+
+| Cut | Workaround |
+|---|---|
+| `NOR` | `XOR` with all-ones, or the `NOT` pseudo |
+| `MUL` `DIV` `REM` | shift-and-add; neither MAXFINDER needs them |
+| `SLTU` `BLTU` `BGEU` | document that every comparison is **signed** |
+| `FDIV` `FNEG` `FEQ` | `FNEG` = `FSUB` from a zero register; `FEQ` = `XOR` of the bit patterns, then `BEQZ` (careful with ±0 and NaN) |
+| `BITR` | shift-and-mask loop; least useful of the original bit-manipulation ideas |
+| `SADD` `SSUB` | each needs an overflow rule and an edge-case hand-verification; skip unless someone owns the semantics |
+| `NOOP` as an instruction | pseudo-instruction above |
+
+## 2.5 Optional extras — only by deliberate swap
+
+The 40 are the target, so anything here costs a benchmark line and a hand-computed result. Add only if an owner takes that on: `MUL`, `DIV`, `SLTU`, `BLTU`, `BGEU`, `FDIV`, `FEQ`, `FNEG`, `EXT`/`EXTS` (bit-field extract, see **§2.7**), `BITR`, `SADD`, `SSUB`. Reserved opcode classes and the large unused `funct` space mean none of these require redesigning the formats.
 
 ## 2.6 Semantics that must be written down explicitly
 
@@ -252,9 +361,11 @@ These are the lines that cost points when missing and cause simulator/benchmark 
 2. **`LUI` semantics:** `R(rd) ← imm16 << 16`. Document the constant-materialization idiom as **`LUI` + `ORI`** (not `LUI` + `ADDI`) — because `ADDI` sign-extends, `LUI`+`ADDI` requires a `+1` correction to the upper half whenever bit 15 of the low half is set. `ORI` zero-extends, so `LUI`+`ORI` is always correct. This is a classic trap; naming it earns coherence credit.
 3. **`R0` writes are discarded.**
 4. **Shift amount ≥ 32** — define (mask to 5 bits).
-5. **Divide by zero** — define (e.g. result = all-ones, no trap).
-6. **FP:** operations round to nearest-even and produce a *binary32* result. NaN/Inf propagate per IEEE-754; `FLT.S`/`FEQ.S` return 0 when either operand is NaN.
-7. **`FCVT.W.S` / `FCVT.S.W`** — rounding/truncation direction and out-of-range behavior.
+5. **Divide by zero** — not applicable: the ISA has no integer divide. If `DIV` is ever added from §2.5, define the result then.
+6. **FP:** operations round to nearest-even and produce a *binary32* result. NaN/Inf propagate per IEEE-754; `FLT` returns 0 when either operand is NaN.
+7. **`FCVTWS` / `FCVTSW`** — float→int truncates toward zero; define out-of-range behavior (e.g. saturate) and int→float rounding (nearest-even).
+8. **`CNTL0` / `CNTT0` of zero** return 32. **`SEXTD`** sign-extends from bit `shamt`; `shamt` must be 0–31.
+9. **Unused R-type fields** (`rs2` on unary ops, `shamt` on non-shift ops) are emitted as zero by the assembler and ignored by the decoder.
 
 ## 2.7 Sub-word data under Option A — what it actually costs
 
@@ -305,23 +416,23 @@ SW    r1, 0(rBase)
 | Load a word | `LW` — 1 | `LW` — 1 |
 | Extract a bit field from a register | 2 | 2 (same) |
 | Load byte *n*, constant *n* | 3 | `LB`/`LBU` — 1 |
-| Load byte at a **runtime** index | 3, **requires `SRLV`** (Tier 2) | `ADD` + `LBU` — 2 |
+| Load byte at a **runtime** index | 3, uses `SRLV` (in the ISA) | `ADD` + `LBU` — 2 |
 | **Store** a byte into a word | **~9** | `SB` — 1 |
 
 Byte *loads* cost 2 extra instructions. Byte *stores* cost ~8 extra and clobber two scratch registers. That asymmetry is the real argument for byte addressing, and it is exactly what Alpha's `EXTBL`/`INSBL`/`MSKBL` existed to soften.
 
 **Neither MAXFINDER performs a sub-word access of any kind**, and the coverage benchmark only needs one if the ISA defines a sub-word instruction to cover. If Option A is chosen, nothing in the project's required workload pays this cost.
 
-**If runtime-indexed byte access is wanted under Option A, promote `SRLV`/`SLLV` to Tier 1** — the constant-`shamt` shifts cannot do it.
+**Runtime-indexed byte access works under Option A** because `SLLV`/`SRLV`/`SRAV` are in the ISA (§2.4); constant-`shamt` shifts alone could not do it. For sign-extending a loaded byte or halfword, `SEXTD` (§2.4) is a one-instruction alternative to the `SLL`+`SRA` pair.
 
 ### A better answer than byte addressing, if bit-field work matters
 
-If the team wants cheap bit-field manipulation, the right tool is an *instruction*, not a change in addressing. The R-type format already has the bits: reinterpret `rs2[15:11]` as `len` and `shamt[10:6]` as `pos`, with no change to the bit layout.
+If the team wants cheap bit-field manipulation, the right tool is an *instruction*, not a change in addressing. The R-type format already has the bits: reinterpret `rs2[20:16]` as `len` and `shamt[10:6]` as `pos`, with no change to the bit layout.
 
 ```
-| opcode | rd | rs1 | len | pos | funct |      EXT rd, rs1, pos, len
+| opcode | rs1 | len | rd | pos | funct |      EXT rd, rs1, pos, len
 ```
-`EXT`: `R(rd) ← zext( R(rs1)[pos+len-1 : pos] )` — a one-instruction replacement for the two-shift idiom, and `EXTS` for the sign-extending variant. This is precisely ARM's `UBFX`/`SBFX` and the RISC-V bit-manipulation approach, it reuses the existing format exactly, and it is a far stronger "modern ISA" talking point than byte loads. Listed in Tier 2 (**§2.5**).
+`EXT`: `R(rd) ← zext( R(rs1)[pos+len-1 : pos] )` — a one-instruction replacement for the two-shift idiom, and `EXTS` for the sign-extending variant. This is precisely ARM's `UBFX`/`SBFX` and the RISC-V bit-manipulation approach, it reuses the existing format exactly, and it is a far stronger "modern ISA" talking point than byte loads. Listed under optional extras (**§2.5**).
 
 ## 2.8 If the team chooses Option B — the complete delta
 
@@ -339,7 +450,7 @@ Everything above stays except the following. Nothing here is hard individually; 
 | Jump target | `PC ← (PC+4)[31:28] : target26 : 00` (MIPS-style; reaches a 256 MiB region — **document this limitation**, it's why `JALR` is mandatory, not optional) |
 | Alignment | `LW`/`SW` require 4-byte alignment, `LH`/`LHU`/`SH` require 2-byte; misaligned access is an **error that halts the simulator with a diagnostic** (simpler than a trap mechanism, and you have no exception architecture) |
 
-**Six added instructions** — all I/S-type, all in Zach's `010000`–`010111` block, which has exactly 6 reserved slots left:
+**Six added instructions** — all I-type, all in Zach's Memory class (`010xxx`), which has exactly 6 reserved slots left:
 
 | Mnemonic | RTL | Note |
 |---|---|---|
@@ -350,7 +461,7 @@ Everything above stays except the following. Nothing here is hard individually; 
 | `SB rs2, imm(rs1)` | `M₈(R(rs1)+sext(imm)) ← R(rs2)[7:0]` | low byte only; rest of word untouched |
 | `SH rs2, imm(rs1)` | `M₁₆(R(rs1)+sext(imm)) ← R(rs2)[15:0]` | low halfword only |
 
-Tier 1 becomes **~47 instructions**. The `U` variants are not optional padding — without them you cannot load a byte as an unsigned value, which is the common case.
+The ISA becomes **~46 instructions**. The `U` variants are not optional padding — without them you cannot load a byte as an unsigned value, which is the common case.
 
 **Simulator impact:** store memory as a byte-keyed sparse map and compose/decompose words on every access, rather than a word-keyed map. Do this *once* in Zach's memory module behind `read8/read16/read32` + `write8/write16/write32` so the endianness logic exists in exactly one place — if byte-lane assembly leaks into the instruction handlers you will be debugging it all of Oct 15.
 
@@ -359,7 +470,7 @@ Tier 1 becomes **~47 instructions**. The `U` variants are not optional padding �
 - The expected result of each `SB`/`SH` depends on the *prior* contents of the surrounding word. Give each sub-word store its own scratch word at a known initial value so the expected output is derivable without tracking cross-instruction aliasing.
 - Add one explicit misalignment test to confirm the diagnostic fires.
 
-**Schedule impact:** add one day. The realistic way to absorb it is to cut Tier 2 entirely and move the `R-BIT` block (keeping only `CMOV`) out of Tier 1.
+**Schedule impact:** add one day. The realistic way to absorb it is to skip every optional extra (§2.5) and trim R-OTHER to `CMOV` plus the two cheapest unary ops.
 
 ---
 
@@ -373,8 +484,8 @@ The due dates (spec → benchmarks → simulator) tempt the team into hand-traci
 
 | Dates | Work | Owner |
 |---|---|---|
-| **Oct 1–2** | **Team vote on addressing: Option A or Option B (§2.8). Not Option C.** This is a hard gate — nothing downstream can be written until it lands, because it sets the `.mem` format, the branch RTL, and the instruction count. Then resolve the rest of Part 1: funct escape, `R0`=0, shared register file, FP-compare-to-GPR, Tier 1 list. | all |
-| | *If B is chosen:* cut Tier 2 entirely, reduce `R-BIT` to `CMOV` only, and shift every date below by one day — meaning the spec work runs Oct 3–5 with no review slack, so the Oct 4 coherence pass becomes non-negotiable rather than nice-to-have. | all |
+| **Oct 1–2** | **Team vote on addressing: Option A or Option B (§2.8). Not Option C.** This is a hard gate — nothing downstream can be written until it lands, because it sets the `.mem` format, the branch RTL, and the instruction count. Then resolve the rest of Part 1: funct escape, `R0`=0, shared register file, FP-compare-to-GPR, three-format layout (§2.2), final instruction list (§2.4). | all |
+| | *If B is chosen:* skip all optional extras, trim R-OTHER to `CMOV` plus the two cheapest unary ops, and shift every date below by one day — meaning the spec work runs Oct 3–5 with no review slack, so the Oct 4 coherence pass becomes non-negotiable rather than nice-to-have. | all |
 | **Oct 2–3** | **Freeze the encoding.** Harrison produces the single authoritative opcode/funct table; no one edits it afterward without telling him. | Harrison (**encoding owner**) |
 | **Oct 3–4** | Each owner fills Format / RTL / Description / Note for their instructions against the frozen encoding. | Piper, Zach, Brad, Eldon, Harrison |
 | **Oct 4** | **Coherence pass.** Two people who did *not* write a section read it: every opcode unique, every format diagram's bits sum to 32, every RTL line updates `PC`, every immediate's extension rule stated. | 2 reviewers |
@@ -412,9 +523,10 @@ Module split, mapped to the same owners:
 | `assembler` | tokenize, labels, encode per format | Harrison |
 | `decode` | 32-bit word → fields | Harrison |
 | `memory` | `.mem` parse, sparse store, `.mem.out` emit | Zach |
-| `alu` | R-ALU + ALU-imm handlers | Piper |
+| `alu` | R-ALU handlers (Piper); ALU-imm handlers (Zach) | Piper, Zach |
 | `branch` | branches, jumps, `PC` update | Brad |
 | `fp` | all R-FP handlers | Eldon |
+| `other` | R-OTHER handlers (`CMOV`, `CNTL0`, `CNTT0`, `POP`, `BYTR`, `SEXTD`) | Harrison |
 | `stats` | per-instruction counters, `.instrCount` emit | whoever finishes first |
 
 ## 3.4 Implementation risks to settle early
@@ -427,9 +539,9 @@ Module split, mapped to the same owners:
 
 ## 3.5 Benchmarks
 
-1. **Coverage benchmark.** One instruction per Tier-1 entry, grouped by class, each writing its result to a distinct memory address so the expected `.mem.out` is a readable one-result-per-address table. Write it *after* the simulator runs, generate the expected file, then hand-verify ~8 representative addresses spanning each class.
+1. **Coverage benchmark.** One instruction per ISA entry (all ~40; pseudo-instructions need no coverage), grouped by class, each writing its result to a distinct memory address so the expected `.mem.out` is a readable one-result-per-address table. Write it *after* the simulator runs, generate the expected file, then hand-verify ~8 representative addresses spanning each class.
 2. **MAXFINDER (int).** Load length and base from memory, loop with `LW` + `SLT` + `CMOV` (branchless inner loop — then say so in the write-up), store the max.
-3. **MAXFINDER (float).** The same program with `FLT.S` substituted for `SLT`. If the two FP decisions in **Part 1 §7** are adopted (shared register file, FP compare writing a GPR), this is a four-line diff from the integer version — which is the entire reason to adopt them. Under Option B it is still a four-line diff; nothing about the FP path changes with addressing granularity, since both MAXFINDERs use full-word access either way.
+3. **MAXFINDER (float).** The same program with `FLT` substituted for `SLT`. If the two FP decisions in **Part 1 §7** are adopted (shared register file, FP compare writing a GPR), this is a four-line diff from the integer version — which is the entire reason to adopt them. Under Option B it is still a four-line diff; nothing about the FP path changes with addressing granularity, since both MAXFINDERs use full-word access either way.
 
 ---
 
