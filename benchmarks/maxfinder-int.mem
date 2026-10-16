@@ -1,0 +1,12 @@
+# MAXFINDER Memory
+26, 32
+0x0000010 0x00000030 # Store max value here after benchmark has finished
+0x0000011 0x00000006 # Length of the array
+0x0000012 0x00000020 # Address of the first value in the array
+0x0000020 0x00000001 # 
+0x0000021 0x00000015 # 
+0x0000022 0x00000020 # 
+0x0000023 0x0000000A # 
+0x0000024 0x00000013 # 
+0x0000025 0x00000003 # 
+0x0000030 0x00000000 # Output val, initialized to 0

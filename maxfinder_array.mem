@@ -1,0 +1,83 @@
+;maxfinder-int
+
+main:
+LD   r2, 0x00000006
+LD   r3, 0x00000020
+BEQ  r0, r2, 		 done
+LD   r4, DATA(r3)
+DEC  r2
+BEQ  r0, r2, 		 done
+
+loop:
+	ADD  r1, r3 		 	 ; Add 1 to the pointer
+	LD   r5, DATA(r3)
+	BLT  r5, r4, 		 incr
+	MOV  r5, r4
+
+incr:	
+	DEC  r2,
+BEQ  r0, r2, 		 done
+	JUMP loop
+
+done:
+	ST   r4, 0x0000030
+	HALT
+ 
+# MAXFINDER Memory
+26, 32
+0x0000010 0x00000030 # Store max value here after benchmark has finished
+0x0000011 0x00000006 # Length of the array
+0x0000012 0x00000020 # Address of the first value in the array
+0x0000020 0x00000001 # 
+0x0000021 0x00000015 # 
+0x0000022 0x00000020 # 
+0x0000023 0x0000000A # 
+0x0000024 0x00000013 # 
+0x0000025 0x00000003 # 
+0x0000030 0x00000000 # Output val, initialized to 0
+
+At the end:
+0x0000030
+# FP MAXFINDER
+
+# Load addresses 
+LDR R10, 0x0011  # R10 = Address holding array length 
+LD R3, R10, 0    # R3 = N (loaded dynamically from memory) 
+
+LDR R11, 0x0012  # R11 = Address holding array pointer 
+LD R2, R11, 0    # R2 = Pointer to start of float array 
+
+LDR R12, 0x0010  # R12 = Address holding output location 
+LD R6, R12, 0    # R6 = Output address 
+
+# Edge-case check: If N == 0, halt immediately or handle empty array 
+BEQ R3, R0, DONE 
+
+# Load the first element as current max 
+FLW R4, R2, 0    # R4 = Array[0] 
+DEC R3, R3       # Decrement counter 
+INC R2, R2       # Advance pointer to Array[1] 
+
+LOOP: 
+BEQ R3, R0, DONE # When remaining count is 0, exit 
+FLW R5, R2, 0    # Load Array[i] 
+FMAX R4, R4, R5  # R4 = max(R4, R5) 
+INC R2, R2       # Move to next word 
+DEC R3, R3       # Decrement counter 
+JUMP LOOP 
+
+DONE: 
+FSW R4, R6, 0    # Write result to memory 
+HALT
+# FP MAXFINDER Memory
+26, 32
+0x0000010 0x00000030 # Output address
+0x0000011 0x00000006 # Length of the array
+0x0000012 0x00000020 # Address of the first value in the array
+0x0000020 0x3FC00000 # +1.5
+0x0000021 0xC04CCCCD # -3.2
+0x0000022 0x416C0000 # +14.75
+0x0000023 0x41100000 # +9.0
+0x0000024 0x41640000 # +14.25
+0x0000025 0x40A00000 # +5
+0x0000030 0x00000000 # Output val, initialized to 0
