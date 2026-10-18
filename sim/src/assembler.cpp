@@ -81,7 +81,6 @@ int operandCount(Shape s)
    {
    case Shape::NONE:
       return 0;
-   case Shape::RD:
    case Shape::TGT:
    case Shape::RS1:
       return 1;
@@ -273,9 +272,6 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
          break;
       case Shape::RD_RS1:
          R(reg(a[1]), 0, reg(a[0]), 0);
-         break;
-      case Shape::RD:
-         R(0, 0, reg(a[0]), 0);
          break;
       case Shape::RD_RS1_RS2_RS3:
          R(reg(a[1]), reg(a[2]), reg(a[0]), reg(a[3]));

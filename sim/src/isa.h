@@ -29,17 +29,16 @@ enum class Cls : uint8_t
 // instruction fields they land in.
 enum class Shape : uint8_t
 {
-   NONE,           // HALT NOP RET
+   NONE,           // HALT NOP
    RD_RS1_RS2,     // ADD rd, rs1, rs2
    RD_RS1,         // INC rd, rs1
-   RD,             // FILL rd | CLR rd | IN rd | OUT rd (rd field is the register)
    RD_RS1_RS2_RS3, // FFMA rd, rs1, rs2, rs3 (rs3 lives in the shamt field)
    RS1_RS2,        // FLT rs1, rs2 | FEQ rs1, rs2 (result goes to FR)
    RT_RS1_IMM,     // LD/ST/FLW/FSW/ADDI/SUBI rt, rs1, imm16 (sign-extended)
    RT_RS1,         // MOV rt, rs1
    RT_IMM,         // LDR rt, imm16
    BR,             // BEQ rs1, rt, target (target = absolute instruction address)
-   TGT,            // JUMP/BEXT target (absolute, 26 bits)
+   TGT,            // JUMP target (absolute, 26 bits)
    RS1,            // JUMPR rs1
    RS1_RT          // JLINK rs1, rt
 };
@@ -52,8 +51,6 @@ enum class Shape : uint8_t
    X(POP, 0x02, R, RD_RS1, Other)                                                                  \
    X(BYTR, 0x03, R, RD_RS1, Other)                                                                 \
    X(SEXTD, 0x04, R, RD_RS1, Other)                                                                \
-   X(MOVGT, 0x05, R, RD_RS1_RS2, Other)                                                            \
-   X(MOVLT, 0x06, R, RD_RS1_RS2, Other)                                                            \
    X(NOP, 0x07, N, NONE, Other)                                                                    \
    /* Memory 001xxx */                                                                             \
    X(LD, 0x08, I, RT_RS1_IMM, Memory)                                                              \
@@ -104,12 +101,6 @@ enum class Shape : uint8_t
    X(JUMP, 0x36, J, TGT, Control)                                                                  \
    X(JUMPR, 0x37, I, RS1, Control)                                                                 \
    X(JLINK, 0x38, I, RS1_RT, Control)                                                              \
-   X(BEXT, 0x39, J, TGT, Control)                                                                  \
-   X(IN, 0x3A, R, RD, Control)                                                                     \
-   X(OUT, 0x3B, R, RD, Control)                                                                    \
-   X(RET, 0x3C, N, NONE, Control)                                                                  \
-   X(FILL, 0x3D, R, RD, Control)                                                                   \
-   X(CLR, 0x3E, R, RD, Control)                                                                    \
    X(HALT, 0x3F, N, NONE, Control)
 
 enum class Op : uint8_t

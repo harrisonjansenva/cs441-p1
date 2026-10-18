@@ -72,9 +72,6 @@ std::string disassemble(uint32_t w)
    case Shape::RD_RS1:
       std::snprintf(b, sizeof b, "%s R%u, R%u", d.name, fRd(w), fRs1(w));
       break;
-   case Shape::RD:
-      std::snprintf(b, sizeof b, "%s R%u", d.name, fRd(w));
-      break;
    case Shape::RD_RS1_RS2_RS3:
       std::snprintf(b, sizeof b, "%s R%u, R%u, R%u, R%u", d.name, fRd(w), fRs1(w), fRs2(w),
                     fShamt(w));

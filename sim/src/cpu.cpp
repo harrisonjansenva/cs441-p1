@@ -2,9 +2,6 @@
 
 #include <bit>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <unistd.h>
 
 namespace
 {
@@ -31,9 +28,6 @@ Decoded decode(uint32_t w)
    case Shape::RD_RS1:
       x.d = wr(fRd(w)), x.s1 = fRs1(w);
       break;
-   case Shape::RD:
-      x.d = wr(fRd(w)), x.s1 = fRd(w);
-      break; // OUT reads s1
    case Shape::RD_RS1_RS2_RS3:
       x.d = wr(fRd(w)), x.s1 = fRs1(w), x.s2 = fRs2(w), x.s3 = fShamt(w);
       break;
@@ -157,16 +151,6 @@ Stop run(Cpu &c, uint64_t budget)
       case Op::SEXTD:
          R[I.d] =
              static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(R[I.s1] & 0xFFFF)));
-         ++pc;
-         break;
-      case Op::MOVGT:
-         if (static_cast<int32_t>(R[I.s1]) > static_cast<int32_t>(R[I.s2]))
-            R[I.d] = R[I.s1];
-         ++pc;
-         break;
-      case Op::MOVLT:
-         if (static_cast<int32_t>(R[I.s1]) < static_cast<int32_t>(R[I.s2]))
-            R[I.d] = R[I.s1];
          ++pc;
          break;
       case Op::NOP:
@@ -395,7 +379,6 @@ Stop run(Cpu &c, uint64_t budget)
    if (cond)                                                                                       \
    {                                                                                               \
       pc = static_cast<uint32_t>(I.imm);                                                           \
-      c.bextArmed = pc;                                                                            \
    }                                                                                               \
    else                                                                                            \
    {                                                                                               \
@@ -436,54 +419,6 @@ Stop run(Cpu &c, uint64_t budget)
          pc = t;
          break;
       }
-      case Op::BEXT: // taken only when we arrived here via a taken branch
-         if (c.bextArmed == pc)
-         {
-            c.bextArmed = 0xFFFFFFFFu;
-            c.sr = pc + 1;
-            pc = static_cast<uint32_t>(I.imm);
-         }
-         else
-         {
-            ++pc;
-         }
-         break;
-      case Op::IN:
-      {
-         // One line from stdin; EOF / blank / non-number reads as 0 (deterministic).
-         if (isatty(STDIN_FILENO))
-         {
-            std::printf("IN R%u > ", I.s1);
-            std::fflush(stdout);
-         }
-         char buf[64];
-         long long v = 0;
-         if (std::fgets(buf, sizeof buf, stdin))
-            v = std::strtoll(buf, nullptr, 0);
-         R[I.d] = static_cast<uint32_t>(v);
-         ++pc;
-         break;
-      }
-      case Op::OUT:
-         std::printf("OUT: 0x%08X (%d)\n", R[I.s1], static_cast<int32_t>(R[I.s1]));
-         std::fflush(stdout);
-         ++pc;
-         break;
-      case Op::RET:
-      {
-         uint32_t t = c.sr;
-         CHECK_PC(t);
-         pc = t;
-         break;
-      }
-      case Op::FILL:
-         R[I.d] = 0xFFFFFFFFu;
-         ++pc;
-         break;
-      case Op::CLR:
-         R[I.d] = 0;
-         ++pc;
-         break;
       case Op::HALT:
          return done(Stop::Halted);
 

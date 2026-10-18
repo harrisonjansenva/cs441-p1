@@ -94,6 +94,7 @@ printf 'JUMP nowhere\nHALT\n'        > t.asm; expect_fail "undefined label rejec
 printf 'FOO R2, R3\nHALT\n'          > t.asm; expect_fail "unknown mnemonic rejected" "unknown instruction"
 printf 'ADD R2, R3\nHALT\n'          > t.asm; expect_fail "wrong operand count rejected" "operand"
 printf 'L:\nL:\nHALT\n'              > t.asm; expect_fail "duplicate label rejected" "duplicate"
+for m in IN OUT FILL CLR RET BEXT MOVGT MOVLT; do printf "$m R2\nHALT\n" > t.asm; expect_fail "removed instruction $m rejected" "unknown instruction"; done
 printf 'LDR R2, 1\n'                 > t.asm; expect_fail "falling off the end faults" "illegal"
 printf 'L: JUMP L\n'                 > t.asm
 out=$("$isa" -r --max-instr 1000 t.asm t.mem 2>&1 </dev/null); rc=$?

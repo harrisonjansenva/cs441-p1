@@ -3,7 +3,6 @@
 #   M[0x10] = address where the result is stored
 #   M[0x11] = N, number of elements
 #   M[0x12] = address of the first element
-# Branchless inner loop: MOVGT replaces the compare-and-branch.
 
     LDR   R10, 0x0011
     LD    R3,  R10, 0        # R3 = N
@@ -21,7 +20,9 @@
 LOOP:
     BEQ   R3, R0, DONE       # no elements left
     LD    R5, R2, 0          # R5 = Array[i]
-    MOVGT R4, R5, R4         # if R5 > R4 then R4 = R5
+    BLE   R5, R4, SKIP       # not larger: keep the current max
+    MOV   R4, R5             # new max
+SKIP:
     INC   R2, R2
     DEC   R3, R3
     JUMP  LOOP

@@ -1,6 +1,6 @@
 # isaSim — CS 441 Project 1 instruction-level simulator
 
-Simulates the team's 32-bit, word-addressable ISA (60 instructions: Other, Memory, ALU,
+Simulates the team's 32-bit, word-addressable ISA (52 instructions: Other, Memory, ALU,
 Floating Point, Control). C++20, standard library + libm only. Tested with g++ 11 (the version on onyx) and Apple clang.
 
 ## Build and run
@@ -27,7 +27,7 @@ Usage: `isaSim -<r|s> <assembly file> <memory file> [-d] [--max-instr N]`
 ### Outputs (written to the current directory)
 
 At the end of either mode the simulator prints the number of times each instruction executed
-(all 60, grouped by class, plus `TOTAL`) and writes:
+(all 52, grouped by class, plus `TOTAL`) and writes:
 
 * `<assembly base name>.instrCount` — the same table (e.g. `maxfinder-fp.asm` → `maxfinder-fp.instrCount`).
 * `<memory file name>.out` — final memory (e.g. `maxfinder-fp.mem` → `maxfinder-fp.mem.out`).
@@ -53,17 +53,16 @@ assembler resolves to concrete addresses. Every error is reported as `file:line:
 
 | Operands | Instructions |
 |---|---|
-| `OP rd, rs1, rs2` | ADD SUB RSB AND OR NAND NOR XOR MOVGT MOVLT FADD FSUB FMULT FDIV FMAX |
+| `OP rd, rs1, rs2` | ADD SUB RSB AND OR NAND NOR XOR FADD FSUB FMULT FDIV FMAX |
 | `OP rd, rs1` | INC DEC RS LS NOT SFLIP CLZ CNTT0 POP BYTR SEXTD FSQRT FNEG FABS FTOIW IWTOF FMOV |
 | `FFMA rd, rs1, rs2, rs3` | rd = rs1·rs2 + rs3 |
 | `OP rs1, rs2` | FLT FEQ (set a bit of FR) |
 | `OP rt, rs1, imm` | LD FLW (rt = M[rs1+imm]), ST FSW (M[rs1+imm] = rt), ADDI SUBI |
 | `MOV rt, rs1` / `LDR rt, imm` | register move / load 16-bit signed immediate (or label address) |
 | `Bxx rs1, rs2, target` | BEQ BNE BLT BLE BGT BGE (signed compare, absolute target) |
-| `JUMP target` / `BEXT target` | absolute jump |
+| `JUMP target` | absolute jump |
 | `JUMPR rs1` / `JLINK rs1, rt` | jump to R[rs1]; JLINK also R[rt] ← PC+1 |
-| `IN rd` / `OUT rd` / `FILL rd` / `CLR rd` | stdin → rd / print rd / rd ← all ones / rd ← 0 |
-| (none) | NOP HALT RET |
+| (none) | NOP HALT |
 
 Aliases accepted: `CNTL0` = `CLZ`, `NOOP` = `NOP`.
 
@@ -80,13 +79,11 @@ I-type `opcode rs1 rt imm16`; J-type `opcode target26`. Opcodes are the 6-bit co
 | R0 / R1 | Hold 0 / 1 permanently; writes to them are discarded. Only 32 registers exist. |
 | Flags FR (`n z l e` = bits 3..0) | ALU-class instructions set n, z from the result; `FLT` sets l; `FEQ` sets e. Branches compare registers directly and do not read FR. FR is visible in step mode. |
 | Shifts | `RS` is a logical right shift by 1, `LS` a left shift by 1. |
-| Signedness | Branches, `MOVGT`/`MOVLT` and `IWTOF` treat registers as signed 32-bit. |
-| Branch / jump targets | Absolute instruction addresses (labels are resolved to them). Branch target field is 16 bits (0–65535); `JUMP`/`BEXT` 26 bits. `BEXT` exists to extend that reach. |
+| Signedness | Branches and `IWTOF` treat registers as signed 32-bit. |
+| Branch / jump targets | Absolute instruction addresses (labels are resolved to them). Branch target field is 16 bits (0–65535); `JUMP` 26 bits. |
 | Memory model | Separate instruction memory (PC counts instructions from 0) and data memory (word addressed, 26-bit address). |
-| `MOVGT rd, rs1, rs2` | If R[rs1] > R[rs2] then R[rd] ← R[rs1] (`MOVLT` likewise with <). |
-| SR (scope register) | `SR ← PC+1` on `JUMP`, `JUMPR`, `JLINK`, and a taken `BEXT`. `RET` does `PC ← SR`. |
-| `BEXT` (tentative) | Jumps only if control arrived at it through a taken conditional branch; otherwise it is a no-op. |
-| `IN` / `OUT` (tentative) | `IN` reads one line from stdin and parses an integer (decimal or `0x`); EOF, a blank line, or a non-number gives 0. When stdin is a terminal it first prints a prompt `IN Rn > `. `OUT` prints `OUT: 0x... (signed)`. In step mode `IN` reads the line after the step prompt's own line. |
+| SR (scope register) | `SR ← PC+1` on `JUMP`, `JUMPR`, `JLINK`. It is only displayed (step mode); return from a call with `JUMPR` on the link register. |
+| Removed instructions | `BEXT`, `IN`, `OUT`, `RET`, `FILL`, `CLR` (tentative in the spec) and `MOVGT`, `MOVLT` are not implemented; their opcodes (`0x05`, `0x06`, `0x39`, `0x3A`–`0x3E`) are illegal. `CLR rd` = `LDR rd, 0`; `FILL rd` = `NOT rd, R0`; return = `JUMPR` on the `JLINK` link register. |
 | Bit ops | `CLZ`/`CNTT0` of 0 give 32; `BYTR` reverses the four bytes; `SEXTD` sign-extends bit 15. |
 | Floating point | IEEE-754 binary32 held in the ordinary registers (`FLW`/`FSW` are the same word moves as `LD`/`ST`). `FFMA` is a true fused multiply-add. `FMAX` returns rs2 unless rs1 > rs2. `FTOIW` truncates toward zero and saturates (NaN → 0). |
 | Faults | Illegal opcode, jumping outside the program, or data address > `0x3FFFFFF` stop the run with a diagnostic; the output files are still written. |
@@ -115,6 +112,6 @@ The handout asks for concrete addresses instead of labels, so the `.asm` files h
 `benchmarks/labeled/` holds the readable labeled sources; `tools/resolve_labels.py` turns one into the
 other (`python3 tools/resolve_labels.py labeled/x.asm > x.asm`). The simulator also accepts labels directly.
 
-* `maxfinder-int.asm` / `.mem` — maximum of an integer array (branchless `MOVGT`); result at `M[0x30]` = `0x20`.
+* `maxfinder-int.asm` / `.mem` — maximum of an integer array (compare and branch); result at `M[0x30]` = `0x20`.
 * `maxfinder-fp.asm` / `.mem` — same for floats (`FMAX`); result `0x416C0000` = 14.75.
-* `benchmark1.asm` / `.mem` — uses all 60 instructions once; each result is stored at `0x200 + n`, and `benchmark1.mem.out` lists them.
+* `benchmark1.asm` / `.mem` — uses all 52 instructions at least once; each result is stored at `0x200 + n`, and `benchmark1.mem.out` lists them.

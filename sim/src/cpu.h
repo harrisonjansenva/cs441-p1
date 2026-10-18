@@ -32,7 +32,6 @@ struct Cpu
    uint32_t pc = 0;
    uint32_t fr = 0; // flag register: bit3 n, bit2 z, bit1 l, bit0 e
    uint32_t sr = 0; // scope register: PC+1 of the last jump
-   uint32_t bextArmed = 0xFFFFFFFFu;
    uint64_t count[NUM_OPS + 1] = {};
    const char *fault = nullptr;
    uint32_t faultAddr = 0;
