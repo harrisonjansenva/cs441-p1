@@ -1,28 +1,31 @@
-#maxfinder-int
+# maxfinder-int: find the maximum of an array of signed 32-bit integers.
+# Memory (see maxfinder-int.mem):
+#   M[0x10] = address where the result is stored
+#   M[0x11] = N, number of elements
+#   M[0x12] = address of the first element
+# Branchless inner loop: MOVGT replaces the compare-and-branch.
 
+LDR R10, 0x0011
+LD R3,  R10, 0              # R3 = N
+LDR R11, 0x0012
+LD R2,  R11, 0              # R2 = pointer to Array[0]
+LDR R12, 0x0010
+LD R6,  R12, 0              # R6 = output address
 
-main:
-    LD   r2, 0x00000006
-    LD   r3, 0x00000020
-    BEQ  r0, r2,           done
-    LD   r4, DATA(r3)
-    DEC  r2
-    BEQ  r0, r2,           done
+BEQ R3, R0, 0x0010          # empty array: nothing to do
 
+LD R4, R2, 0                # R4 = max = Array[0]
+DEC R3, R3
+INC R2, R2
 
-loop:
-    ADD  r1, r3                           # Add 1 to the pointer
-    LD   r5, DATA(r3)
-    BLT  r5, r4,           incr
-    MOV  r5, r4
+# LOOP: (0x000A)
+BEQ R3, R0, 0x0010          # no elements left
+LD R5, R2, 0                # R5 = Array[i]
+MOVGT R4, R5, R4            # if R5 > R4 then R4 = R5
+INC R2, R2
+DEC R3, R3
+JUMP 0x000A
 
-
-incr:        
-    DEC  r2,
-    BEQ  r0, r2,           done
-    JUMP loop
-
-
-done:
-    ST   r4, 0x0000030
-    HALT
+# DONE: (0x0010)
+ST R4, R6, 0                # M[output] = max
+HALT
