@@ -2,7 +2,7 @@
 # onyx has g++ 11.5 (C++20 capable). Override with `make STD=c++17` if needed.
 CXX      ?= g++
 STD      ?= c++20
-CXXFLAGS ?= -O2
+CXXFLAGS ?= -O3
 CXXFLAGS += -std=$(STD) -Wall -Wextra -ffp-contract=off
 LDLIBS   += -lm
 
