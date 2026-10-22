@@ -1,5 +1,9 @@
-// isaSim - instruction level simulator for the CS 441 P1 ISA.
-//   usage: isaSim -<r|s> <assembly file> <memory file> [-d] [--max-instr N]
+/**
+ * @file main.cpp
+ * @brief Command-line driver for the CS 441 P1 instruction-level simulator.
+ *
+ * Usage: `isaSim -<r|s> <assembly file> <memory file> [-d] [--max-instr N]`
+ */
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,8 +17,10 @@
 namespace
 {
 
+/// Instruction budget when --max-instr is not given.
 constexpr uint64_t DEFAULT_MAX_INSTR = 2000000000ull;
 
+/// Print the usage message to stderr.
 void usage()
 {
    std::fputs(
@@ -26,18 +32,26 @@ void usage()
        stderr);
 }
 
+/// File name with any directory part removed.
 std::string baseName(const std::string &path)
 {
    size_t s = path.find_last_of("/\\");
    return s == std::string::npos ? path : path.substr(s + 1);
 }
 
+/// File name without its last extension.
 std::string stripExt(const std::string &name)
 {
    size_t d = name.find_last_of('.');
    return d == std::string::npos || d == 0 ? name : name.substr(0, d);
 }
 
+/**
+ * @brief Print PC, flags, SR, R0-R31 and the instruction total (one step-mode display).
+ * @param c        Machine state.
+ * @param p        Assembled program, used to disassemble the next instruction.
+ * @param executed Description of what just ran; omitted if empty.
+ */
 void printState(const Cpu &c, const Program &p, const std::string &executed)
 {
    if (!executed.empty())
@@ -55,6 +69,7 @@ void printState(const Cpu &c, const Program &p, const std::string &executed)
    std::printf("Total instructions executed: %llu\n", static_cast<unsigned long long>(c.total()));
 }
 
+/// Per-instruction execution counts, grouped by class, ending with TOTAL.
 std::string countsReport(const Cpu &c)
 {
    std::string s;
@@ -242,7 +257,7 @@ int main(int argc, char **argv)
       rc = 4;
    }
 
-   // ---- end-of-run outputs (written in the current directory) ----
+   // end-of-run outputs, written to the current directory
    std::string report = countsReport(cpu);
    std::printf("\nInstruction counts:\n%s", report.c_str());
 

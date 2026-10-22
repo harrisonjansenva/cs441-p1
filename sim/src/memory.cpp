@@ -1,3 +1,7 @@
+/**
+ * @file memory.cpp
+ * @brief .mem file parsing and .mem.out writing.
+ */
 #include "memory.h"
 
 #include <algorithm>
@@ -8,6 +12,7 @@
 namespace
 {
 
+/// Copy of a string without leading or trailing whitespace.
 std::string trim(const std::string &s)
 {
    size_t b = 0, e = s.size();
@@ -18,13 +23,19 @@ std::string trim(const std::string &s)
    return s.substr(b, e - b);
 }
 
+/// Drop everything from the first `#` or `;` onward.
 std::string stripComment(const std::string &s)
 {
    size_t p = s.find_first_of("#;");
    return p == std::string::npos ? s : s.substr(0, p);
 }
 
-// Parse a hex number with optional 0x prefix. Returns false on any bad digit.
+/**
+ * @brief Parse a hex number with an optional 0x prefix.
+ * @param tok Text to parse.
+ * @param out Receives the value on success.
+ * @return false if the text is empty, too long, or has a non-hex digit.
+ */
 bool parseHex(const std::string &tok, uint64_t &out)
 {
    size_t i = 0;
@@ -49,6 +60,7 @@ bool parseHex(const std::string &tok, uint64_t &out)
    return true;
 }
 
+/// Split a line into tokens at whitespace and commas.
 std::vector<std::string> splitTokens(const std::string &s)
 {
    std::vector<std::string> t;
@@ -84,7 +96,8 @@ std::string Memory::loadMemFile(const std::string &path)
    {
       ++lineNo;
       if (first)
-      { // first line is the benchmark-name comment
+      {
+         // the first line is the benchmark-name comment
          first = false;
          std::string t = trim(line);
          while (!t.empty() && (t[0] == '#' || t[0] == ';'))
@@ -105,7 +118,8 @@ std::string Memory::loadMemFile(const std::string &path)
          continue;
       std::vector<std::string> tok = splitTokens(body);
       if (!haveHeader)
-      { // "26, 32"
+      {
+         // header line: "26, 32"
          uint64_t a, w;
          if (tok.size() != 2 || !(std::all_of(tok[0].begin(), tok[0].end(), ::isdigit)) ||
              !(std::all_of(tok[1].begin(), tok[1].end(), ::isdigit)))
@@ -133,7 +147,8 @@ std::string Memory::loadMemFile(const std::string &path)
 
 std::string Memory::writeMemOut(const std::string &path) const
 {
-   std::vector<uint32_t> addrs; // ascending: pages in order, bits in order
+   // collect written addresses in ascending order: pages in order, bits in order
+   std::vector<uint32_t> addrs;
    for (uint32_t pg = 0; pg < NUM_PAGES; ++pg)
    {
       const Page *p = pages_[pg].get();

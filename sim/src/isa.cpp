@@ -1,3 +1,7 @@
+/**
+ * @file isa.cpp
+ * @brief Opcode and mnemonic lookup, and the disassembler.
+ */
 #include "isa.h"
 
 #include <cstdio>
@@ -41,7 +45,7 @@ Op opFromMnemonic(const std::string &upper)
       std::unordered_map<std::string, Op> t;
       for (int i = 0; i < NUM_OPS; ++i)
          t[ISA[i].name] = static_cast<Op>(i);
-      t["CNTL0"] = Op::CLZ; // earlier spec drafts
+      t["CNTL0"] = Op::CLZ; // name used in earlier spec drafts
       t["NOOP"] = Op::NOP;
       return t;
    }();

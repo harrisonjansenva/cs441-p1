@@ -1,3 +1,7 @@
+/**
+ * @file cpu.cpp
+ * @brief Instruction decoder and execution loop.
+ */
 #include "cpu.h"
 
 #include <bit>
@@ -6,11 +10,13 @@
 namespace
 {
 
+/// Destination register for writes: R0 and R1 are read-only, so redirect them to the sink.
 inline uint8_t wr(uint32_t r)
 {
    return r < 2 ? Cpu::SINK : static_cast<uint8_t>(r);
 }
 
+/// Split a raw instruction word into the fields its operand shape uses.
 Decoded decode(uint32_t w)
 {
    Decoded x;
@@ -63,15 +69,18 @@ Decoded decode(uint32_t w)
    return x;
 }
 
+/// Reinterpret register bits as an IEEE-754 binary32 value.
 inline float f32(uint32_t u)
 {
    return std::bit_cast<float>(u);
 }
+/// Reinterpret a binary32 value as register bits.
 inline uint32_t u32(float f)
 {
    return std::bit_cast<uint32_t>(f);
 }
 
+/// Float to signed word: truncates toward zero, saturates on overflow, NaN becomes 0.
 inline uint32_t ftoiw(float f)
 {
    if (std::isnan(f))
@@ -114,7 +123,7 @@ Stop run(Cpu &c, uint64_t budget)
       c.faultAddr = a;
       return done(Stop::Fault);
    };
-   // n and z flags from an ALU result
+   // set the n and z flags from an ALU result
 #define SET_NZ(r) (fr = (fr & 3u) | (((r) >> 28) & 8u) | ((r) == 0 ? 4u : 0u))
 #define CHECK_PC(t)                                                                                \
    if ((t) >= c.progSize)                                                                          \
@@ -131,7 +140,7 @@ Stop run(Cpu &c, uint64_t budget)
       ++cnt[static_cast<int>(I.op)];
       switch (I.op)
       {
-      // ---------------- Other ----------------
+      // Other
       case Op::CLZ:
          R[I.d] = static_cast<uint32_t>(std::countl_zero(R[I.s1]));
          ++pc;
@@ -157,7 +166,7 @@ Stop run(Cpu &c, uint64_t budget)
          ++pc;
          break;
 
-      // ---------------- Memory ----------------
+      // Memory
       case Op::LD:
       case Op::FLW:
       {
@@ -183,7 +192,7 @@ Stop run(Cpu &c, uint64_t budget)
          ++pc;
          break;
 
-      // ---------------- ALU ----------------
+      // ALU
       case Op::ADD:
       {
          uint32_t r = R[I.s1] + R[I.s2];
@@ -313,7 +322,7 @@ Stop run(Cpu &c, uint64_t budget)
          break;
       }
 
-      // ---------------- Floating point (shared register file) ----------------
+      // Floating point (shares the integer register file)
       case Op::FADD:
          R[I.d] = u32(f32(R[I.s1]) + f32(R[I.s2]));
          ++pc;
@@ -374,7 +383,7 @@ Stop run(Cpu &c, uint64_t budget)
          ++pc;
          break;
 
-         // ---------------- Control ----------------
+         // Control
 #define BRANCH(cond)                                                                               \
    if (cond)                                                                                       \
    {                                                                                               \

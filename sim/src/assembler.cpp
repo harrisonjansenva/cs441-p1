@@ -1,3 +1,7 @@
+/**
+ * @file assembler.cpp
+ * @brief Two-pass assembler implementation.
+ */
 #include "assembler.h"
 
 #include <cctype>
@@ -10,14 +14,16 @@
 namespace
 {
 
+/// One parsed instruction line, waiting for pass 2 to encode it.
 struct Item
 {
-   uint32_t addr;
-   Op op;
-   std::vector<std::string> args;
-   int line;
+   uint32_t addr;                  ///< instruction address
+   Op op;                          ///< instruction
+   std::vector<std::string> args;  ///< operand tokens
+   int line;                       ///< source line, for error messages
 };
 
+/// Upper-case copy of a string.
 std::string upper(std::string s)
 {
    for (char &c : s)
@@ -25,7 +31,7 @@ std::string upper(std::string s)
    return s;
 }
 
-// Decimal or 0x-hex integer with optional sign.
+/// Parse a decimal or 0x-hex integer with an optional sign.
 std::optional<int64_t> parseInt(const std::string &t)
 {
    if (t.empty())
@@ -56,6 +62,7 @@ std::optional<int64_t> parseInt(const std::string &t)
    return neg ? -v : v;
 }
 
+/// Split a line into tokens at whitespace and commas.
 std::vector<std::string> tokens(const std::string &s)
 {
    std::vector<std::string> t;
@@ -75,6 +82,7 @@ std::vector<std::string> tokens(const std::string &s)
    return t;
 }
 
+/// Number of assembly operands an instruction of this shape takes.
 int operandCount(Shape s)
 {
    switch (s)
@@ -112,7 +120,7 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
    auto fail = [&](int line, const std::string &m)
    { errors.push_back(path + ":" + std::to_string(line) + ": error: " + m); };
 
-   // ---- Pass 1: split lines, collect labels / origins, assign addresses ----
+   // Pass 1: split lines, collect labels and origins, assign addresses
    std::vector<Item> items;
    std::map<std::string, uint32_t> labels;
    uint32_t addr = 0;
@@ -190,7 +198,7 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
    out.filled.assign(maxAddr + 1, 0);
    out.srcLine.assign(maxAddr + 1, 0);
 
-   // ---- Pass 2: encode ----
+   // Pass 2: encode
    for (const Item &it : items)
    {
       const InstrDesc &d = desc(it.op);
@@ -233,7 +241,7 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
          }
          return static_cast<uint32_t>(*n) & 0xFFFF;
       };
-      // absolute instruction address: label or number, must name a slot inside the program
+      // absolute instruction address: a label or number that names a slot inside the program
       auto target = [&](const std::string &t, uint32_t maxVal) -> uint32_t
       {
          int64_t v;
