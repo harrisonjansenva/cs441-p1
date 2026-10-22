@@ -7,7 +7,7 @@ Floating Point, Control). C++20, standard library + libm only. Tested with g++ 1
 
 ```
 $ cd sim
-$ make                 # builds build/isaSim_bin  (use `make STD=c++17` on an older compiler)
+$ make                 # builds build/isaSim_bin  (needs a C++20 compiler, g++ 11 or newer)
 $ ./isaSim -r <assembly file> <memory file>     # run straight through
 $ ./isaSim -s <assembly file> <memory file>     # step by step
 ```
@@ -88,17 +88,21 @@ I-type `opcode rs1 rt imm16`; J-type `opcode target26`. Opcodes are the 6-bit co
 | Floating point | IEEE-754 binary32 held in the ordinary registers (`FLW`/`FSW` are the same word moves as `LD`/`ST`). `FFMA` is a true fused multiply-add. `FMAX` returns rs2 unless rs1 > rs2. `FTOIW` truncates toward zero and saturates (NaN → 0). |
 | Faults | Illegal opcode, jumping outside the program, or data address > `0x3FFFFFF` stop the run with a diagnostic; the output files are still written. |
 
-## Design (why it is fast and easy to change)
+## Code layout
 
-* `src/isa.h` holds one table (`ISA_LIST`) of all instructions: mnemonic, opcode, format, operand shape, class.
-  The assembler, encoder, decoder, disassembler, and the per-instruction counters are all generated from it.
+* `src/isa.h` holds one table (`ISA_LIST`) of all instructions: mnemonic, opcode, operand shape, class.
+  The opcode lookup, the per-instruction counters and the instruction-count report all come from it.
+  Operand shapes are handled in `decode()` (`cpu.cpp`), `operandCount()` and the encoder (`assembler.cpp`),
+  and `disassemble()` (`isa.cpp`), so a new shape needs a case in each.
 * `src/assembler.cpp` is a two-pass assembler that produces real 32-bit words (range-checked), so the encodings
-  in the spec are actually exercised. Words are then decoded **once** into a flat array of `Decoded` records.
-* `src/cpu.cpp` has a single `run(cpu, budget)` loop shared by `-r` and `-s`: a dense `switch` over the pre-decoded
-  op, PC and flags in locals, one counter increment per instruction, no bounds checks (a sentinel entry after the
-  program is an illegal instruction), and writes to R0/R1 redirected at decode time to a scratch slot. Step mode just
-  calls it with a budget of 1, so both modes always agree. Throughput is roughly 8×10⁸ instructions/second.
+  in the spec are actually exercised. `Cpu::load` then decodes the words once into an array of `Decoded` records.
+* `src/cpu.cpp` has a single `Cpu::run(budget)` loop shared by `-r` and `-s`; step mode calls it with a small
+  budget, so both modes behave the same. Three details are there for speed and simplicity:
+  writes to R0/R1 are redirected at decode time to a scratch register, so the loop never tests for them;
+  a trailing illegal-instruction entry stops a program that runs off its end without a bounds check;
+  and `pc` and the flags are kept in locals while the loop runs.
 * `src/memory.cpp` is a paged, lazily allocated 2²⁶-word memory (no 256 MB allocation).
+* `src/text.h` has the small string helpers shared by the assembler and the `.mem` loader.
 
 ## Tests
 

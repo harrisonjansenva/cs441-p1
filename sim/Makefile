@@ -1,5 +1,5 @@
 # Build: `make`   Clean: `make clean`   Test: `make test`
-# onyx has g++ 11.5 (C++20 capable). Override with `make STD=c++17` if needed.
+# Needs a C++20 compiler (g++ 11 or newer); onyx has g++ 11.5.
 CXX      ?= g++
 STD      ?= c++20
 CXXFLAGS ?= -O3

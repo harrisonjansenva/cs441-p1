@@ -49,7 +49,7 @@ class Memory
    {
       std::unique_ptr<Page> &p = pages_[addr >> PAGE_BITS];
       if (!p)
-         p.reset(new Page());
+         p = std::make_unique<Page>();
       uint32_t o = addr & (PAGE_WORDS - 1);
       p->data[o] = value;
       p->written[o >> 6] |= uint64_t{1} << (o & 63);
@@ -77,7 +77,7 @@ class Memory
    /** @brief One allocated page of memory. */
    struct Page
    {
-      uint32_t data[PAGE_WORDS] = {};        ///< word contents
+      uint32_t data[PAGE_WORDS] = {};         ///< word contents
       uint64_t written[PAGE_WORDS / 64] = {}; ///< bitmap of words ever written
    };
    std::vector<std::unique_ptr<Page>> pages_; ///< null until a page is first written

@@ -11,85 +11,106 @@ namespace
 {
 
 /// Destination register for writes: R0 and R1 are read-only, so redirect them to the sink.
-inline uint8_t wr(uint32_t r)
+inline uint8_t destination(uint32_t reg)
 {
-   return r < 2 ? Cpu::SINK : static_cast<uint8_t>(r);
+   return reg < 2 ? Cpu::SINK : static_cast<uint8_t>(reg);
 }
 
 /// Split a raw instruction word into the fields its operand shape uses.
-Decoded decode(uint32_t w)
+Decoded decode(uint32_t word)
 {
-   Decoded x;
-   x.op = opFromOpcode(fOpcode(w));
-   if (x.op == Op::ILLEGAL)
-      return x;
-   int32_t simm = static_cast<int16_t>(fImm16(w));
-   switch (desc(x.op).shape)
+   Decoded in;
+   in.op = opFromOpcode(fOpcode(word));
+   if (in.op == Op::ILLEGAL)
+      return in;
+
+   int32_t simm = static_cast<int16_t>(fImm16(word));
+   switch (desc(in.op).shape)
    {
    case Shape::NONE:
       break;
    case Shape::RD_RS1_RS2:
-      x.d = wr(fRd(w)), x.s1 = fRs1(w), x.s2 = fRs2(w);
+      in.rd = destination(fRd(word));
+      in.rs1 = fRs1(word);
+      in.rs2 = fRs2(word);
       break;
    case Shape::RD_RS1:
-      x.d = wr(fRd(w)), x.s1 = fRs1(w);
+      in.rd = destination(fRd(word));
+      in.rs1 = fRs1(word);
       break;
    case Shape::RD_RS1_RS2_RS3:
-      x.d = wr(fRd(w)), x.s1 = fRs1(w), x.s2 = fRs2(w), x.s3 = fShamt(w);
+      in.rd = destination(fRd(word));
+      in.rs1 = fRs1(word);
+      in.rs2 = fRs2(word);
+      in.rs3 = fShamt(word);
       break;
    case Shape::RS1_RS2:
-      x.s1 = fRs1(w), x.s2 = fRs2(w);
+      in.rs1 = fRs1(word);
+      in.rs2 = fRs2(word);
       break;
    case Shape::RT_RS1_IMM:
-      x.s1 = fRs1(w), x.imm = simm;
-      if (x.op == Op::ST || x.op == Op::FSW)
-         x.s2 = fRs2(w); // rt is the value stored
+      in.rs1 = fRs1(word);
+      in.imm = simm;
+      if (in.op == Op::ST || in.op == Op::FSW)
+         in.rs2 = fRs2(word); // rt is the value being stored
       else
-         x.d = wr(fRs2(w));
+         in.rd = destination(fRs2(word)); // rt is the destination
       break;
    case Shape::RT_RS1:
-      x.d = wr(fRs2(w)), x.s1 = fRs1(w);
+      in.rd = destination(fRs2(word));
+      in.rs1 = fRs1(word);
       break;
    case Shape::RT_IMM:
-      x.d = wr(fRs2(w)), x.imm = simm;
+      in.rd = destination(fRs2(word));
+      in.imm = simm;
       break;
    case Shape::BR:
-      x.s1 = fRs1(w), x.s2 = fRs2(w), x.imm = static_cast<int32_t>(fImm16(w));
+      in.rs1 = fRs1(word);
+      in.rs2 = fRs2(word);
+      in.imm = static_cast<int32_t>(fImm16(word));
       break;
    case Shape::TGT:
-      x.imm = static_cast<int32_t>(fTarget26(w));
+      in.imm = static_cast<int32_t>(fTarget26(word));
       break;
    case Shape::RS1:
-      x.s1 = fRs1(w);
+      in.rs1 = fRs1(word);
       break;
    case Shape::RS1_RT:
-      x.s1 = fRs1(w), x.d = wr(fRs2(w));
+      in.rs1 = fRs1(word);
+      in.rd = destination(fRs2(word));
       break;
    }
-   return x;
+   return in;
 }
 
 /// Reinterpret register bits as an IEEE-754 binary32 value.
-inline float f32(uint32_t u)
+inline float asFloat(uint32_t bits)
 {
-   return std::bit_cast<float>(u);
+   return std::bit_cast<float>(bits);
 }
+
 /// Reinterpret a binary32 value as register bits.
-inline uint32_t u32(float f)
+inline uint32_t asBits(float value)
 {
-   return std::bit_cast<uint32_t>(f);
+   return std::bit_cast<uint32_t>(value);
+}
+
+/// Reinterpret register bits as a signed integer.
+inline int32_t asSigned(uint32_t bits)
+{
+   return static_cast<int32_t>(bits);
 }
 
 /// Float to signed word: truncates toward zero, saturates on overflow, NaN becomes 0.
-inline uint32_t ftoiw(float f)
+inline uint32_t floatToWord(float value)
 {
-   if (std::isnan(f))
+   if (std::isnan(value))
       return 0;
-   if (f >= 2147483648.0f)
+   if (value >= 2147483648.0f)
       return 0x7FFFFFFFu;
-   if (f <= -2147483648.0f)
+   if (value <= -2147483648.0f)
       return 0x80000000u;
-   return static_cast<uint32_t>(static_cast<int32_t>(f)); // truncates toward zero
+   return static_cast<uint32_t>(static_cast<int32_t>(value));
 }
 
 } // namespace
@@ -99,344 +120,250 @@ void Cpu::load(const Program &p)
    progSize = p.size();
    prog.assign(progSize + 1, Decoded{});
    for (uint32_t i = 0; i < progSize; ++i)
+   {
       if (p.filled[i])
          prog[i] = decode(p.words[i]);
+   }
 }
 
-Stop run(Cpu &c, uint64_t budget)
+Stop Cpu::run(uint64_t budget)
 {
-   uint32_t *const R = c.R;
-   const Decoded *const P = c.prog.data();
-   uint64_t *const cnt = c.count;
-   uint32_t pc = c.pc;
-   uint32_t fr = c.fr;
+   // Work on local copies of the state the loop touches every iteration.
+   uint32_t *const reg = R;
+   const Decoded *const program = prog.data();
+   uint32_t currentPc = pc;
+   uint32_t flags = fr;
 
-   auto done = [&](Stop s)
+   // Save the local state back into the Cpu and report why we stopped.
+   auto stop = [&](Stop reason)
    {
-      c.pc = pc;
-      c.fr = fr;
-      return s;
+      pc = currentPc;
+      fr = flags;
+      return reason;
    };
-   auto trap = [&](const char *msg, uint32_t a)
+   auto raiseFault = [&](const char *message, uint32_t address)
    {
-      c.fault = msg;
-      c.faultAddr = a;
-      return done(Stop::Fault);
+      fault = message;
+      faultAddr = address;
+      return stop(Stop::Fault);
    };
-   // set the n and z flags from an ALU result
-#define SET_NZ(r) (fr = (fr & 3u) | (((r) >> 28) & 8u) | ((r) == 0 ? 4u : 0u))
-#define CHECK_PC(t)                                                                                \
-   if ((t) >= c.progSize)                                                                          \
-   return trap("jump target outside the program", (t))
-#define EA(I)                                                                                      \
-   uint32_t ea = R[(I).s1] + static_cast<uint32_t>((I).imm);                                       \
-   if (ea > Memory::MAX_ADDR)                                                                      \
-   return trap("data address out of range", ea)
+   // Write an ALU result and update the n and z flags from it.
+   auto aluWrite = [&](uint8_t rd, uint32_t result)
+   {
+      reg[rd] = result;
+      uint32_t negative = (result >> 28) & 8u;
+      uint32_t zero = result == 0 ? 4u : 0u;
+      flags = (flags & 3u) | negative | zero;
+   };
 
    while (budget)
    {
       --budget;
-      const Decoded &I = P[pc];
-      ++cnt[static_cast<int>(I.op)];
-      switch (I.op)
+      const Decoded &in = program[currentPc];
+      ++count[static_cast<int>(in.op)];
+      uint32_t nextPc = currentPc + 1;
+
+      switch (in.op)
       {
       // Other
       case Op::CLZ:
-         R[I.d] = static_cast<uint32_t>(std::countl_zero(R[I.s1]));
-         ++pc;
+         reg[in.rd] = static_cast<uint32_t>(std::countl_zero(reg[in.rs1]));
          break;
       case Op::CNTT0:
-         R[I.d] = static_cast<uint32_t>(std::countr_zero(R[I.s1]));
-         ++pc;
+         reg[in.rd] = static_cast<uint32_t>(std::countr_zero(reg[in.rs1]));
          break;
       case Op::POP:
-         R[I.d] = static_cast<uint32_t>(std::popcount(R[I.s1]));
-         ++pc;
+         reg[in.rd] = static_cast<uint32_t>(std::popcount(reg[in.rs1]));
          break;
       case Op::BYTR:
-         R[I.d] = __builtin_bswap32(R[I.s1]);
-         ++pc;
+         reg[in.rd] = __builtin_bswap32(reg[in.rs1]);
          break;
       case Op::SEXTD:
-         R[I.d] =
-             static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(R[I.s1] & 0xFFFF)));
-         ++pc;
+         reg[in.rd] = static_cast<uint32_t>(static_cast<int16_t>(reg[in.rs1] & 0xFFFF));
          break;
       case Op::NOP:
-         ++pc;
          break;
 
       // Memory
       case Op::LD:
       case Op::FLW:
       {
-         EA(I);
-         R[I.d] = c.mem.read(ea);
-         ++pc;
+         uint32_t address = reg[in.rs1] + static_cast<uint32_t>(in.imm);
+         if (address > Memory::MAX_ADDR)
+            return raiseFault("data address out of range", address);
+         reg[in.rd] = mem.read(address);
          break;
       }
       case Op::ST:
       case Op::FSW:
       {
-         EA(I);
-         c.mem.write(ea, R[I.s2]);
-         ++pc;
+         uint32_t address = reg[in.rs1] + static_cast<uint32_t>(in.imm);
+         if (address > Memory::MAX_ADDR)
+            return raiseFault("data address out of range", address);
+         mem.write(address, reg[in.rs2]);
          break;
       }
       case Op::MOV:
-         R[I.d] = R[I.s1];
-         ++pc;
+         reg[in.rd] = reg[in.rs1];
          break;
       case Op::LDR:
-         R[I.d] = static_cast<uint32_t>(I.imm);
-         ++pc;
+         reg[in.rd] = static_cast<uint32_t>(in.imm);
          break;
 
       // ALU
       case Op::ADD:
-      {
-         uint32_t r = R[I.s1] + R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] + reg[in.rs2]);
          break;
-      }
       case Op::SUB:
-      {
-         uint32_t r = R[I.s1] - R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] - reg[in.rs2]);
          break;
-      }
       case Op::RSB:
-      {
-         uint32_t r = R[I.s2] - R[I.s1];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs2] - reg[in.rs1]);
          break;
-      }
       case Op::INC:
-      {
-         uint32_t r = R[I.s1] + 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] + 1);
          break;
-      }
       case Op::DEC:
-      {
-         uint32_t r = R[I.s1] - 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] - 1);
          break;
-      }
       case Op::RS:
-      {
-         uint32_t r = R[I.s1] >> 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] >> 1);
          break;
-      }
       case Op::LS:
-      {
-         uint32_t r = R[I.s1] << 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] << 1);
          break;
-      }
       case Op::AND:
-      {
-         uint32_t r = R[I.s1] & R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] & reg[in.rs2]);
          break;
-      }
       case Op::OR:
-      {
-         uint32_t r = R[I.s1] | R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] | reg[in.rs2]);
          break;
-      }
       case Op::NAND:
-      {
-         uint32_t r = ~(R[I.s1] & R[I.s2]);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, ~(reg[in.rs1] & reg[in.rs2]));
          break;
-      }
       case Op::NOR:
-      {
-         uint32_t r = ~(R[I.s1] | R[I.s2]);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, ~(reg[in.rs1] | reg[in.rs2]));
          break;
-      }
       case Op::XOR:
-      {
-         uint32_t r = R[I.s1] ^ R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] ^ reg[in.rs2]);
          break;
-      }
       case Op::NOT:
-      {
-         uint32_t r = ~R[I.s1];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, ~reg[in.rs1]);
          break;
-      }
       case Op::ADDI:
-      {
-         uint32_t r = R[I.s1] + static_cast<uint32_t>(I.imm);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] + static_cast<uint32_t>(in.imm));
          break;
-      }
       case Op::SUBI:
-      {
-         uint32_t r = R[I.s1] - static_cast<uint32_t>(I.imm);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, reg[in.rs1] - static_cast<uint32_t>(in.imm));
          break;
-      }
       case Op::SFLIP:
-      {
-         uint32_t r = 0u - R[I.s1];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         aluWrite(in.rd, 0u - reg[in.rs1]);
          break;
-      }
 
       // Floating point (shares the integer register file)
       case Op::FADD:
-         R[I.d] = u32(f32(R[I.s1]) + f32(R[I.s2]));
-         ++pc;
+         reg[in.rd] = asBits(asFloat(reg[in.rs1]) + asFloat(reg[in.rs2]));
          break;
       case Op::FSUB:
-         R[I.d] = u32(f32(R[I.s1]) - f32(R[I.s2]));
-         ++pc;
+         reg[in.rd] = asBits(asFloat(reg[in.rs1]) - asFloat(reg[in.rs2]));
          break;
       case Op::FMULT:
-         R[I.d] = u32(f32(R[I.s1]) * f32(R[I.s2]));
-         ++pc;
+         reg[in.rd] = asBits(asFloat(reg[in.rs1]) * asFloat(reg[in.rs2]));
          break;
       case Op::FDIV:
-         R[I.d] = u32(f32(R[I.s1]) / f32(R[I.s2]));
-         ++pc;
+         reg[in.rd] = asBits(asFloat(reg[in.rs1]) / asFloat(reg[in.rs2]));
          break;
       case Op::FFMA:
-         R[I.d] = u32(std::fmaf(f32(R[I.s1]), f32(R[I.s2]), f32(R[I.s3])));
-         ++pc;
+         reg[in.rd] =
+             asBits(std::fmaf(asFloat(reg[in.rs1]), asFloat(reg[in.rs2]), asFloat(reg[in.rs3])));
          break;
       case Op::FSQRT:
-         R[I.d] = u32(std::sqrt(f32(R[I.s1])));
-         ++pc;
+         reg[in.rd] = asBits(std::sqrt(asFloat(reg[in.rs1])));
          break;
       case Op::FNEG:
-         R[I.d] = R[I.s1] ^ 0x80000000u;
-         ++pc;
+         reg[in.rd] = reg[in.rs1] ^ 0x80000000u;
          break;
       case Op::FABS:
-         R[I.d] = R[I.s1] & 0x7FFFFFFFu;
-         ++pc;
+         reg[in.rd] = reg[in.rs1] & 0x7FFFFFFFu;
          break;
       case Op::FLT:
-         fr = (fr & ~2u) | (f32(R[I.s1]) < f32(R[I.s2]) ? 2u : 0u);
-         ++pc;
+         flags = (flags & ~2u) | (asFloat(reg[in.rs1]) < asFloat(reg[in.rs2]) ? 2u : 0u);
          break;
       case Op::FEQ:
-         fr = (fr & ~1u) | (f32(R[I.s1]) == f32(R[I.s2]) ? 1u : 0u);
-         ++pc;
+         flags = (flags & ~1u) | (asFloat(reg[in.rs1]) == asFloat(reg[in.rs2]) ? 1u : 0u);
          break;
       case Op::FMAX:
       {
-         float a = f32(R[I.s1]), b = f32(R[I.s2]);
-         R[I.d] = a > b ? R[I.s1] : R[I.s2];
-         ++pc;
+         bool firstIsLarger = asFloat(reg[in.rs1]) > asFloat(reg[in.rs2]);
+         reg[in.rd] = firstIsLarger ? reg[in.rs1] : reg[in.rs2];
          break;
       }
       case Op::FTOIW:
-         R[I.d] = ftoiw(f32(R[I.s1]));
-         ++pc;
+         reg[in.rd] = floatToWord(asFloat(reg[in.rs1]));
          break;
       case Op::IWTOF:
-         R[I.d] = u32(static_cast<float>(static_cast<int32_t>(R[I.s1])));
-         ++pc;
+         reg[in.rd] = asBits(static_cast<float>(asSigned(reg[in.rs1])));
          break;
       case Op::FMOV:
-         R[I.d] = R[I.s1];
-         ++pc;
+         reg[in.rd] = reg[in.rs1];
          break;
 
-         // Control
-#define BRANCH(cond)                                                                               \
-   if (cond)                                                                                       \
-   {                                                                                               \
-      pc = static_cast<uint32_t>(I.imm);                                                           \
-   }                                                                                               \
-   else                                                                                            \
-   {                                                                                               \
-      ++pc;                                                                                        \
-   }                                                                                               \
-   break;
+      // Control
       case Op::BEQ:
-         BRANCH(R[I.s1] == R[I.s2])
+         if (reg[in.rs1] == reg[in.rs2])
+            nextPc = static_cast<uint32_t>(in.imm);
+         break;
       case Op::BNE:
-         BRANCH(R[I.s1] != R[I.s2])
+         if (reg[in.rs1] != reg[in.rs2])
+            nextPc = static_cast<uint32_t>(in.imm);
+         break;
       case Op::BLT:
-         BRANCH(static_cast<int32_t>(R[I.s1]) < static_cast<int32_t>(R[I.s2]))
+         if (asSigned(reg[in.rs1]) < asSigned(reg[in.rs2]))
+            nextPc = static_cast<uint32_t>(in.imm);
+         break;
       case Op::BLE:
-         BRANCH(static_cast<int32_t>(R[I.s1]) <= static_cast<int32_t>(R[I.s2]))
+         if (asSigned(reg[in.rs1]) <= asSigned(reg[in.rs2]))
+            nextPc = static_cast<uint32_t>(in.imm);
+         break;
       case Op::BGT:
-         BRANCH(static_cast<int32_t>(R[I.s1]) > static_cast<int32_t>(R[I.s2]))
+         if (asSigned(reg[in.rs1]) > asSigned(reg[in.rs2]))
+            nextPc = static_cast<uint32_t>(in.imm);
+         break;
       case Op::BGE:
-         BRANCH(static_cast<int32_t>(R[I.s1]) >= static_cast<int32_t>(R[I.s2]))
-#undef BRANCH
+         if (asSigned(reg[in.rs1]) >= asSigned(reg[in.rs2]))
+            nextPc = static_cast<uint32_t>(in.imm);
+         break;
       case Op::JUMP:
-         c.sr = pc + 1;
-         pc = static_cast<uint32_t>(I.imm);
+         sr = nextPc;
+         nextPc = static_cast<uint32_t>(in.imm);
          break;
       case Op::JUMPR:
       {
-         uint32_t t = R[I.s1];
-         CHECK_PC(t);
-         c.sr = pc + 1;
-         pc = t;
+         uint32_t target = reg[in.rs1];
+         if (target >= progSize)
+            return raiseFault("jump target outside the program", target);
+         sr = nextPc;
+         nextPc = target;
          break;
       }
       case Op::JLINK:
       {
-         uint32_t t = R[I.s1];
-         CHECK_PC(t);
-         R[I.d] = pc + 1;
-         c.sr = pc + 1;
-         pc = t;
+         uint32_t target = reg[in.rs1];
+         if (target >= progSize)
+            return raiseFault("jump target outside the program", target);
+         reg[in.rd] = nextPc;
+         sr = nextPc;
+         nextPc = target;
          break;
       }
       case Op::HALT:
-         return done(Stop::Halted);
+         return stop(Stop::Halted);
 
       case Op::ILLEGAL:
-         return trap("illegal instruction / PC outside program", pc);
+         return raiseFault("illegal instruction / PC outside program", currentPc);
       }
+
+      currentPc = nextPc;
    }
-   return done(Stop::Budget);
-#undef SET_NZ
-#undef CHECK_PC
-#undef EA
+   return stop(Stop::Budget);
 }

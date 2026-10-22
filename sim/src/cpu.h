@@ -21,10 +21,10 @@
 struct Decoded
 {
    Op op = Op::ILLEGAL;
-   uint8_t d = 0;  ///< destination register (or Cpu::SINK for R0/R1)
-   uint8_t s1 = 0; ///< first source register
-   uint8_t s2 = 0; ///< second source register
-   uint8_t s3 = 0; ///< third source register (FFMA only)
+   uint8_t rd = 0;  ///< destination register (or Cpu::SINK for R0/R1)
+   uint8_t rs1 = 0; ///< first source register
+   uint8_t rs2 = 0; ///< second source register (the value stored, for ST/FSW)
+   uint8_t rs3 = 0; ///< third source register (FFMA only)
    int32_t imm = 0; ///< sign-extended imm16, branch target, or 26-bit jump target
 };
 
@@ -65,6 +65,16 @@ struct Cpu
     */
    void load(const Program &p);
 
+   /**
+    * @brief Execute instructions until HALT, a fault, or the budget runs out.
+    *
+    * Both run mode and step mode call this; step mode passes a small budget.
+    *
+    * @param budget Maximum number of instructions to execute.
+    * @return Why execution stopped.
+    */
+   Stop run(uint64_t budget);
+
    /** @brief Total number of instructions executed so far. */
    uint64_t total() const
    {
@@ -74,14 +84,3 @@ struct Cpu
       return t;
    }
 };
-
-/**
- * @brief Execute instructions until HALT, a fault, or the budget runs out.
- *
- * Both run mode and step mode call this; step mode passes a small budget.
- *
- * @param cpu    Machine to run; its pc, registers and counters are updated.
- * @param budget Maximum number of instructions to execute.
- * @return Why execution stopped.
- */
-Stop run(Cpu &cpu, uint64_t budget);

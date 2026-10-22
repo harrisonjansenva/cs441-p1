@@ -10,82 +10,80 @@
 #include <optional>
 
 #include "isa.h"
+#include "text.h"
 
 namespace
 {
 
+constexpr uint32_t MAX_ORIGIN = 0x3FFFFFF;      ///< largest address a numeric label may set
+constexpr uint32_t MAX_INSTR_ADDR = 0xFFFFF;    ///< largest address the simulator assembles to
+constexpr uint32_t MAX_BRANCH_TARGET = 0xFFFF;  ///< branch targets live in imm16
+constexpr uint32_t MAX_JUMP_TARGET = 0x3FFFFFF; ///< jump targets are 26 bits
+constexpr int64_t MAX_PARSED_VALUE = int64_t{1} << 40; ///< stops parseInt from overflowing
+
 /// One parsed instruction line, waiting for pass 2 to encode it.
 struct Item
 {
-   uint32_t addr;                  ///< instruction address
-   Op op;                          ///< instruction
-   std::vector<std::string> args;  ///< operand tokens
-   int line;                       ///< source line, for error messages
+   uint32_t addr;                 ///< instruction address
+   Op op;                         ///< instruction
+   std::vector<std::string> args; ///< operand tokens
+   int line;                      ///< source line, for error messages
 };
 
 /// Upper-case copy of a string.
-std::string upper(std::string s)
+std::string upper(std::string text)
 {
-   for (char &c : s)
-      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-   return s;
+   for (char &ch : text)
+      ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+   return text;
 }
 
 /// Parse a decimal or 0x-hex integer with an optional sign.
-std::optional<int64_t> parseInt(const std::string &t)
+std::optional<int64_t> parseInt(const std::string &text)
 {
-   if (t.empty())
+   if (text.empty())
       return std::nullopt;
-   size_t i = 0;
-   bool neg = false;
-   if (t[0] == '-' || t[0] == '+')
-      neg = t[0] == '-', i = 1;
-   if (i >= t.size())
-      return std::nullopt;
-   int base = 10;
-   if (t.size() - i > 2 && t[i] == '0' && (t[i + 1] == 'x' || t[i + 1] == 'X'))
-      base = 16, i += 2;
-   int64_t v = 0;
-   for (; i < t.size(); ++i)
-   {
-      int c = std::tolower(static_cast<unsigned char>(t[i])), d;
-      if (c >= '0' && c <= '9')
-         d = c - '0';
-      else if (base == 16 && c >= 'a' && c <= 'f')
-         d = c - 'a' + 10;
-      else
-         return std::nullopt;
-      v = v * base + d;
-      if (v > (int64_t{1} << 40))
-         return std::nullopt;
-   }
-   return neg ? -v : v;
-}
 
-/// Split a line into tokens at whitespace and commas.
-std::vector<std::string> tokens(const std::string &s)
-{
-   std::vector<std::string> t;
-   std::string cur;
-   for (char c : s)
+   size_t pos = 0;
+   bool negative = false;
+   if (text[0] == '-' || text[0] == '+')
    {
-      if (c == ',' || std::isspace(static_cast<unsigned char>(c)))
-      {
-         if (!cur.empty())
-            t.push_back(cur), cur.clear();
-      }
-      else
-         cur += c;
+      negative = text[0] == '-';
+      pos = 1;
    }
-   if (!cur.empty())
-      t.push_back(cur);
-   return t;
+   if (pos >= text.size())
+      return std::nullopt;
+
+   int base = 10;
+   if (text.size() - pos > 2 && text[pos] == '0' && (text[pos + 1] == 'x' || text[pos + 1] == 'X'))
+   {
+      base = 16;
+      pos += 2;
+   }
+
+   int64_t value = 0;
+   for (; pos < text.size(); ++pos)
+   {
+      int ch = std::tolower(static_cast<unsigned char>(text[pos]));
+      int digit;
+      if (ch >= '0' && ch <= '9')
+         digit = ch - '0';
+      else if (base == 16 && ch >= 'a' && ch <= 'f')
+         digit = ch - 'a' + 10;
+      else
+         return std::nullopt;
+
+      value = value * base + digit;
+      if (value > MAX_PARSED_VALUE)
+         return std::nullopt;
+   }
+   return negative ? -value : value;
 }
 
 /// Number of assembly operands an instruction of this shape takes.
-int operandCount(Shape s)
+int operandCount(Shape shape)
 {
-   switch (s)
+   switch (shape)
    {
    case Shape::NONE:
       return 0;
@@ -117,40 +115,43 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
    if (!in)
       return {"cannot open assembly file '" + path + "'"};
 
-   auto fail = [&](int line, const std::string &m)
-   { errors.push_back(path + ":" + std::to_string(line) + ": error: " + m); };
+   auto fail = [&](int line, const std::string &message)
+   { errors.push_back(path + ":" + std::to_string(line) + ": error: " + message); };
 
    // Pass 1: split lines, collect labels and origins, assign addresses
    std::vector<Item> items;
    std::map<std::string, uint32_t> labels;
    uint32_t addr = 0;
-   std::string raw;
+   std::string rawLine;
    int lineNo = 0;
-   while (std::getline(in, raw))
+   while (std::getline(in, rawLine))
    {
       ++lineNo;
-      size_t c = raw.find_first_of("#;");
-      std::string s = c == std::string::npos ? raw : raw.substr(0, c);
+      std::string text = stripComment(rawLine);
+
       // peel off leading "label:" prefixes
       for (;;)
       {
-         size_t colon = s.find(':');
+         size_t colon = text.find(':');
          if (colon == std::string::npos)
             break;
-         std::string name = s.substr(0, colon);
-         size_t b = name.find_first_not_of(" \t\r");
-         if (b == std::string::npos)
+
+         std::string name = text.substr(0, colon);
+         size_t nameStart = name.find_first_not_of(" \t\r");
+         if (nameStart == std::string::npos)
             break;
-         name = name.substr(b);
+         name = name.substr(nameStart);
          if (name.find_first_of(" \t,\r") != std::string::npos)
-            break; // ':' is not a label
-         s = s.substr(colon + 1);
-         if (auto n = parseInt(name))
-         { // numeric label = origin
-            if (*n < 0 || *n > 0x3FFFFFF)
+            break; // the ':' is not part of a label
+
+         text = text.substr(colon + 1);
+         if (auto origin = parseInt(name))
+         {
+            // a numeric label sets the address of the next instruction
+            if (*origin < 0 || *origin > MAX_ORIGIN)
                fail(lineNo, "origin out of range: " + name);
             else
-               addr = static_cast<uint32_t>(*n);
+               addr = static_cast<uint32_t>(*origin);
          }
          else if (labels.count(name))
          {
@@ -161,29 +162,32 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
             labels[name] = addr;
          }
       }
-      std::vector<std::string> t = tokens(s);
-      if (t.empty())
+
+      std::vector<std::string> operands = splitTokens(text);
+      if (operands.empty())
          continue;
-      Op op = opFromMnemonic(upper(t[0]));
+
+      Op op = opFromMnemonic(upper(operands[0]));
       if (op == Op::ILLEGAL)
       {
-         fail(lineNo, "unknown instruction '" + t[0] + "'");
+         fail(lineNo, "unknown instruction '" + operands[0] + "'");
          continue;
       }
-      t.erase(t.begin());
-      int want = operandCount(desc(op).shape);
-      if (static_cast<int>(t.size()) != want)
+      operands.erase(operands.begin());
+
+      int expected = operandCount(desc(op).shape);
+      if (static_cast<int>(operands.size()) != expected)
       {
-         fail(lineNo, std::string(desc(op).name) + " takes " + std::to_string(want) +
-                          " operand(s), got " + std::to_string(t.size()));
+         fail(lineNo, std::string(desc(op).name) + " takes " + std::to_string(expected) +
+                          " operand(s), got " + std::to_string(operands.size()));
          continue;
       }
-      if (addr > 0xFFFFF)
+      if (addr > MAX_INSTR_ADDR)
       {
          fail(lineNo, "instruction address too large for the simulator (max 0xFFFFF)");
          continue;
       }
-      items.push_back({addr, op, std::move(t), lineNo});
+      items.push_back({addr, op, std::move(operands), lineNo});
       ++addr;
    }
    if (items.empty() && errors.empty())
@@ -192,128 +196,136 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
       return errors;
 
    uint32_t maxAddr = 0;
-   for (const Item &it : items)
-      maxAddr = std::max(maxAddr, it.addr);
+   for (const Item &item : items)
+      maxAddr = std::max(maxAddr, item.addr);
    out.words.assign(maxAddr + 1, 0);
    out.filled.assign(maxAddr + 1, 0);
    out.srcLine.assign(maxAddr + 1, 0);
 
    // Pass 2: encode
-   for (const Item &it : items)
+   for (const Item &item : items)
    {
-      const InstrDesc &d = desc(it.op);
-      const auto &a = it.args;
-      auto reg = [&](const std::string &t) -> uint32_t
+      const InstrDesc &info = desc(item.op);
+      const auto &args = item.args;
+
+      auto reg = [&](const std::string &token) -> uint32_t
       {
-         std::string u = upper(t);
-         if (u.size() >= 2 && u[0] == 'R')
+         std::string name = upper(token);
+         if (name.size() >= 2 && name[0] == 'R')
          {
-            auto n = parseInt(u.substr(1));
-            if (n && *n >= 0 && *n <= 31 &&
-                u.find_first_not_of("0123456789", 1) == std::string::npos)
-               return static_cast<uint32_t>(*n);
-            if (n)
+            auto number = parseInt(name.substr(1));
+            bool allDigits = name.find_first_not_of("0123456789", 1) == std::string::npos;
+            if (number && *number >= 0 && *number <= 31 && allDigits)
+               return static_cast<uint32_t>(*number);
+            if (number)
             {
-               fail(it.line, "register '" + t + "' out of range (R0-R31)");
+               fail(item.line, "register '" + token + "' out of range (R0-R31)");
                return 0;
             }
          }
-         fail(it.line, "expected a register, got '" + t + "'");
+         fail(item.line, "expected a register, got '" + token + "'");
          return 0;
       };
-      auto imm16 = [&](const std::string &t) -> uint32_t
+
+      auto imm16 = [&](const std::string &token) -> uint32_t
       {
-         auto n = parseInt(t);
-         if (!n)
+         auto number = parseInt(token);
+         if (!number)
          {
-            if (auto l = labels.find(t); l != labels.end())
-               n = l->second; // LDR rt, label
+            // LDR rt, label
+            if (auto label = labels.find(token); label != labels.end())
+               number = label->second;
          }
-         if (!n)
+         if (!number)
          {
-            fail(it.line, "expected an integer immediate, got '" + t + "'");
+            fail(item.line, "expected an integer immediate, got '" + token + "'");
             return 0;
          }
-         if (*n < -32768 || *n > 32767)
+         if (*number < -32768 || *number > 32767)
          {
-            fail(it.line, "immediate " + t + " does not fit in signed 16 bits");
+            fail(item.line, "immediate " + token + " does not fit in signed 16 bits");
             return 0;
          }
-         return static_cast<uint32_t>(*n) & 0xFFFF;
-      };
-      // absolute instruction address: a label or number that names a slot inside the program
-      auto target = [&](const std::string &t, uint32_t maxVal) -> uint32_t
-      {
-         int64_t v;
-         if (auto n = parseInt(t))
-            v = *n;
-         else if (auto l = labels.find(t); l != labels.end())
-            v = l->second;
-         else
-         {
-            fail(it.line, "undefined label '" + t + "'");
-            return 0;
-         }
-         if (v < 0 || v > static_cast<int64_t>(maxVal))
-         {
-            fail(it.line, "target " + t + " out of range (max " + std::to_string(maxVal) + ")");
-            return 0;
-         }
-         if (v > static_cast<int64_t>(maxAddr))
-         {
-            fail(it.line, "target " + t + " is past the end of the program");
-            return 0;
-         }
-         return static_cast<uint32_t>(v);
+         return static_cast<uint32_t>(*number) & 0xFFFF;
       };
 
-      uint32_t w = static_cast<uint32_t>(d.opcode) << 26;
-      auto R = [&](uint32_t rs1, uint32_t rs2, uint32_t rd, uint32_t sh)
-      { w |= rs1 << 21 | rs2 << 16 | rd << 11 | sh << 6; };
-      auto I = [&](uint32_t rs1, uint32_t rt, uint32_t imm) { w |= rs1 << 21 | rt << 16 | imm; };
-      switch (d.shape)
+      // absolute instruction address: a label or number that names a slot inside the program
+      auto target = [&](const std::string &token, uint32_t maxValue) -> uint32_t
+      {
+         int64_t value;
+         if (auto number = parseInt(token))
+         {
+            value = *number;
+         }
+         else if (auto label = labels.find(token); label != labels.end())
+         {
+            value = label->second;
+         }
+         else
+         {
+            fail(item.line, "undefined label '" + token + "'");
+            return 0;
+         }
+         if (value < 0 || value > static_cast<int64_t>(maxValue))
+         {
+            fail(item.line,
+                 "target " + token + " out of range (max " + std::to_string(maxValue) + ")");
+            return 0;
+         }
+         if (value > static_cast<int64_t>(maxAddr))
+         {
+            fail(item.line, "target " + token + " is past the end of the program");
+            return 0;
+         }
+         return static_cast<uint32_t>(value);
+      };
+
+      uint32_t opcode = info.opcode;
+      uint32_t word = makeJ(opcode, 0);
+      switch (info.shape)
       {
       case Shape::NONE:
          break;
       case Shape::RD_RS1_RS2:
-         R(reg(a[1]), reg(a[2]), reg(a[0]), 0);
+         word = makeR(opcode, reg(args[1]), reg(args[2]), reg(args[0]));
          break;
       case Shape::RD_RS1:
-         R(reg(a[1]), 0, reg(a[0]), 0);
+         word = makeR(opcode, reg(args[1]), 0, reg(args[0]));
          break;
       case Shape::RD_RS1_RS2_RS3:
-         R(reg(a[1]), reg(a[2]), reg(a[0]), reg(a[3]));
+         word = makeR(opcode, reg(args[1]), reg(args[2]), reg(args[0]), reg(args[3]));
          break;
       case Shape::RS1_RS2:
-         R(reg(a[0]), reg(a[1]), 0, 0);
+         word = makeR(opcode, reg(args[0]), reg(args[1]), 0);
          break;
       case Shape::RT_RS1_IMM:
-         I(reg(a[1]), reg(a[0]), imm16(a[2]));
+         word = makeI(opcode, reg(args[1]), reg(args[0]), imm16(args[2]));
          break;
       case Shape::RT_RS1:
-         I(reg(a[1]), reg(a[0]), 0);
+         word = makeI(opcode, reg(args[1]), reg(args[0]), 0);
          break;
       case Shape::RT_IMM:
-         I(0, reg(a[0]), imm16(a[1]));
+         word = makeI(opcode, 0, reg(args[0]), imm16(args[1]));
          break;
       case Shape::BR:
-         I(reg(a[0]), reg(a[1]), target(a[2], 0xFFFF));
+         word = makeI(opcode, reg(args[0]), reg(args[1]), target(args[2], MAX_BRANCH_TARGET));
          break;
       case Shape::TGT:
-         w |= target(a[0], 0x3FFFFFF);
+         word = makeJ(opcode, target(args[0], MAX_JUMP_TARGET));
          break;
       case Shape::RS1:
-         I(reg(a[0]), 0, 0);
+         word = makeI(opcode, reg(args[0]), 0, 0);
          break;
       case Shape::RS1_RT:
-         I(reg(a[0]), reg(a[1]), 0);
+         word = makeI(opcode, reg(args[0]), reg(args[1]), 0);
          break;
       }
-      if (out.filled[it.addr])
-         fail(it.line, "address overlaps an earlier instruction");
-      out.words[it.addr] = w;
-      out.filled[it.addr] = 1;
-      out.srcLine[it.addr] = it.line;
+
+      if (out.filled[item.addr])
+         fail(item.line, "address overlaps an earlier instruction");
+      out.words[item.addr] = word;
+      out.filled[item.addr] = 1;
+      out.srcLine[item.addr] = item.line;
    }
    return errors;
 }

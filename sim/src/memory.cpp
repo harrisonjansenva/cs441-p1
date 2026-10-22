@@ -9,26 +9,10 @@
 #include <cstdio>
 #include <fstream>
 
+#include "text.h"
+
 namespace
 {
-
-/// Copy of a string without leading or trailing whitespace.
-std::string trim(const std::string &s)
-{
-   size_t b = 0, e = s.size();
-   while (b < e && std::isspace(static_cast<unsigned char>(s[b])))
-      ++b;
-   while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1])))
-      --e;
-   return s.substr(b, e - b);
-}
-
-/// Drop everything from the first `#` or `;` onward.
-std::string stripComment(const std::string &s)
-{
-   size_t p = s.find_first_of("#;");
-   return p == std::string::npos ? s : s.substr(0, p);
-}
 
 /**
  * @brief Parse a hex number with an optional 0x prefix.
@@ -60,26 +44,6 @@ bool parseHex(const std::string &tok, uint64_t &out)
    return true;
 }
 
-/// Split a line into tokens at whitespace and commas.
-std::vector<std::string> splitTokens(const std::string &s)
-{
-   std::vector<std::string> t;
-   std::string cur;
-   for (char c : s)
-   {
-      if (c == ',' || std::isspace(static_cast<unsigned char>(c)))
-      {
-         if (!cur.empty())
-            t.push_back(cur), cur.clear();
-      }
-      else
-         cur += c;
-   }
-   if (!cur.empty())
-      t.push_back(cur);
-   return t;
-}
-
 } // namespace
 
 std::string Memory::loadMemFile(const std::string &path)
@@ -97,21 +61,18 @@ std::string Memory::loadMemFile(const std::string &path)
       ++lineNo;
       if (first)
       {
-         // the first line is the benchmark-name comment
          first = false;
-         std::string t = trim(line);
-         while (!t.empty() && (t[0] == '#' || t[0] == ';'))
-            t = trim(t.substr(1));
-         title_ = t;
-         // A first line that is not a comment is accepted only if it parses as data below.
-         if (!trim(line).empty() && trim(line)[0] != '#' && trim(line)[0] != ';')
+         std::string text = trim(line);
+         bool isComment = text.empty() || text[0] == '#' || text[0] == ';';
+         if (isComment)
          {
-            title_.clear();
-         }
-         else
-         {
+            // the first line is the benchmark-name comment
+            while (!text.empty() && (text[0] == '#' || text[0] == ';'))
+               text = trim(text.substr(1));
+            title_ = text;
             continue;
          }
+         // a first line that is not a comment is accepted only if it parses as data below
       }
       std::string body = trim(stripComment(line));
       if (body.empty())

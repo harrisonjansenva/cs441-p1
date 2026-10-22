@@ -27,83 +27,85 @@ const char *className(Cls c)
 
 Op opFromOpcode(uint32_t opcode6)
 {
-   static const std::array<Op, 64> table = []
+   static const std::array<Op, 64> byOpcode = []
    {
-      std::array<Op, 64> t;
-      t.fill(Op::ILLEGAL);
+      std::array<Op, 64> table;
+      table.fill(Op::ILLEGAL);
       for (int i = 0; i < NUM_OPS; ++i)
-         t[ISA[i].opcode] = static_cast<Op>(i);
-      return t;
+         table[ISA[i].opcode] = static_cast<Op>(i);
+      return table;
    }();
-   return opcode6 < 64 ? table[opcode6] : Op::ILLEGAL;
+   return opcode6 < 64 ? byOpcode[opcode6] : Op::ILLEGAL;
 }
 
 Op opFromMnemonic(const std::string &upper)
 {
-   static const std::unordered_map<std::string, Op> table = []
+   static const std::unordered_map<std::string, Op> byName = []
    {
-      std::unordered_map<std::string, Op> t;
+      std::unordered_map<std::string, Op> table;
       for (int i = 0; i < NUM_OPS; ++i)
-         t[ISA[i].name] = static_cast<Op>(i);
-      t["CNTL0"] = Op::CLZ; // name used in earlier spec drafts
-      t["NOOP"] = Op::NOP;
-      return t;
+         table[ISA[i].name] = static_cast<Op>(i);
+      table["CNTL0"] = Op::CLZ; // name used in earlier spec drafts
+      table["NOOP"] = Op::NOP;
+      return table;
    }();
-   auto it = table.find(upper);
-   return it == table.end() ? Op::ILLEGAL : it->second;
+   auto found = byName.find(upper);
+   return found == byName.end() ? Op::ILLEGAL : found->second;
 }
 
-std::string disassemble(uint32_t w)
+std::string disassemble(uint32_t word)
 {
-   Op op = opFromOpcode(fOpcode(w));
+   Op op = opFromOpcode(fOpcode(word));
    if (op == Op::ILLEGAL)
    {
-      char b[48];
-      std::snprintf(b, sizeof b, ".word 0x%08X", w);
-      return b;
+      char text[48];
+      std::snprintf(text, sizeof text, ".word 0x%08X", word);
+      return text;
    }
-   const InstrDesc &d = desc(op);
-   char b[96];
-   int16_t simm = static_cast<int16_t>(fImm16(w));
-   switch (d.shape)
+   const InstrDesc &info = desc(op);
+   char text[96];
+   int16_t simm = static_cast<int16_t>(fImm16(word));
+   switch (info.shape)
    {
    case Shape::NONE:
-      std::snprintf(b, sizeof b, "%s", d.name);
+      std::snprintf(text, sizeof text, "%s", info.name);
       break;
    case Shape::RD_RS1_RS2:
-      std::snprintf(b, sizeof b, "%s R%u, R%u, R%u", d.name, fRd(w), fRs1(w), fRs2(w));
+      std::snprintf(text, sizeof text, "%s R%u, R%u, R%u", info.name, fRd(word), fRs1(word),
+                    fRs2(word));
       break;
    case Shape::RD_RS1:
-      std::snprintf(b, sizeof b, "%s R%u, R%u", d.name, fRd(w), fRs1(w));
+      std::snprintf(text, sizeof text, "%s R%u, R%u", info.name, fRd(word), fRs1(word));
       break;
    case Shape::RD_RS1_RS2_RS3:
-      std::snprintf(b, sizeof b, "%s R%u, R%u, R%u, R%u", d.name, fRd(w), fRs1(w), fRs2(w),
-                    fShamt(w));
+      std::snprintf(text, sizeof text, "%s R%u, R%u, R%u, R%u", info.name, fRd(word), fRs1(word),
+                    fRs2(word), fShamt(word));
       break;
    case Shape::RS1_RS2:
-      std::snprintf(b, sizeof b, "%s R%u, R%u", d.name, fRs1(w), fRs2(w));
+      std::snprintf(text, sizeof text, "%s R%u, R%u", info.name, fRs1(word), fRs2(word));
       break;
    case Shape::RT_RS1_IMM:
-      std::snprintf(b, sizeof b, "%s R%u, R%u, %d", d.name, fRs2(w), fRs1(w), simm);
+      std::snprintf(text, sizeof text, "%s R%u, R%u, %d", info.name, fRs2(word), fRs1(word), simm);
       break;
    case Shape::RT_RS1:
-      std::snprintf(b, sizeof b, "%s R%u, R%u", d.name, fRs2(w), fRs1(w));
+      std::snprintf(text, sizeof text, "%s R%u, R%u", info.name, fRs2(word), fRs1(word));
       break;
    case Shape::RT_IMM:
-      std::snprintf(b, sizeof b, "%s R%u, %d", d.name, fRs2(w), simm);
+      std::snprintf(text, sizeof text, "%s R%u, %d", info.name, fRs2(word), simm);
       break;
    case Shape::BR:
-      std::snprintf(b, sizeof b, "%s R%u, R%u, 0x%04X", d.name, fRs1(w), fRs2(w), fImm16(w));
+      std::snprintf(text, sizeof text, "%s R%u, R%u, 0x%04X", info.name, fRs1(word), fRs2(word),
+                    fImm16(word));
       break;
    case Shape::TGT:
-      std::snprintf(b, sizeof b, "%s 0x%07X", d.name, fTarget26(w));
+      std::snprintf(text, sizeof text, "%s 0x%07X", info.name, fTarget26(word));
       break;
    case Shape::RS1:
-      std::snprintf(b, sizeof b, "%s R%u", d.name, fRs1(w));
+      std::snprintf(text, sizeof text, "%s R%u", info.name, fRs1(word));
       break;
    case Shape::RS1_RT:
-      std::snprintf(b, sizeof b, "%s R%u, R%u", d.name, fRs1(w), fRs2(w));
+      std::snprintf(text, sizeof text, "%s R%u, R%u", info.name, fRs1(word), fRs2(word));
       break;
    }
-   return b;
+   return text;
 }
