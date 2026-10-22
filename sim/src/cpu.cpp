@@ -1,86 +1,101 @@
 #include "cpu.h"
 
-#include <bit>
 #include <cmath>
+#include <cstring>
 
 namespace
 {
 
-inline uint8_t wr(uint32_t r)
+// Helper to convert raw uint32_t to float
+float uintToFloat(uint32_t u)
 {
-   return r < 2 ? Cpu::SINK : static_cast<uint8_t>(r);
+   float f;
+   std::memcpy(&f, &u, sizeof(float));
+   return f;
 }
 
-Decoded decode(uint32_t w)
+// Helper to convert float to raw uint32_t
+uint32_t floatToUint(float f)
 {
-   Decoded x;
-   x.op = opFromOpcode(fOpcode(w));
-   if (x.op == Op::ILLEGAL)
-      return x;
-   int32_t simm = static_cast<int16_t>(fImm16(w));
-   switch (desc(x.op).shape)
-   {
-   case Shape::NONE:
-      break;
-   case Shape::RD_RS1_RS2:
-      x.d = wr(fRd(w)), x.s1 = fRs1(w), x.s2 = fRs2(w);
-      break;
-   case Shape::RD_RS1:
-      x.d = wr(fRd(w)), x.s1 = fRs1(w);
-      break;
-   case Shape::RD_RS1_RS2_RS3:
-      x.d = wr(fRd(w)), x.s1 = fRs1(w), x.s2 = fRs2(w), x.s3 = fShamt(w);
-      break;
-   case Shape::RS1_RS2:
-      x.s1 = fRs1(w), x.s2 = fRs2(w);
-      break;
-   case Shape::RT_RS1_IMM:
-      x.s1 = fRs1(w), x.imm = simm;
-      if (x.op == Op::ST || x.op == Op::FSW)
-         x.s2 = fRs2(w); // rt is the value stored
-      else
-         x.d = wr(fRs2(w));
-      break;
-   case Shape::RT_RS1:
-      x.d = wr(fRs2(w)), x.s1 = fRs1(w);
-      break;
-   case Shape::RT_IMM:
-      x.d = wr(fRs2(w)), x.imm = simm;
-      break;
-   case Shape::BR:
-      x.s1 = fRs1(w), x.s2 = fRs2(w), x.imm = static_cast<int32_t>(fImm16(w));
-      break;
-   case Shape::TGT:
-      x.imm = static_cast<int32_t>(fTarget26(w));
-      break;
-   case Shape::RS1:
-      x.s1 = fRs1(w);
-      break;
-   case Shape::RS1_RT:
-      x.s1 = fRs1(w), x.d = wr(fRs2(w));
-      break;
-   }
-   return x;
+   uint32_t u;
+   std::memcpy(&u, &f, sizeof(uint32_t));
+   return u;
 }
 
-inline float f32(uint32_t u)
-{
-   return std::bit_cast<float>(u);
-}
-inline uint32_t u32(float f)
-{
-   return std::bit_cast<uint32_t>(f);
-}
-
-inline uint32_t ftoiw(float f)
+// Convert float to signed 32-bit integer word with saturation
+uint32_t floatToIntWord(float f)
 {
    if (std::isnan(f))
+   {
       return 0;
+   }
    if (f >= 2147483648.0f)
+   {
       return 0x7FFFFFFFu;
+   }
    if (f <= -2147483648.0f)
+   {
       return 0x80000000u;
-   return static_cast<uint32_t>(static_cast<int32_t>(f)); // truncates toward zero
+   }
+   return static_cast<uint32_t>(static_cast<int32_t>(f));
+}
+
+// Count leading zeros
+uint32_t countLeadingZeros(uint32_t val)
+{
+   if (val == 0)
+      return 32;
+   uint32_t count = 0;
+   for (int i = 31; i >= 0; i--)
+   {
+      if ((val >> i) & 1)
+         break;
+      count++;
+   }
+   return count;
+}
+
+// Count trailing zeros
+uint32_t countTrailingZeros(uint32_t val)
+{
+   if (val == 0)
+      return 32;
+   uint32_t count = 0;
+   while ((val & 1) == 0)
+   {
+      count++;
+      val >>= 1;
+   }
+   return count;
+}
+
+// Population count (number of set bits)
+uint32_t popCount(uint32_t val)
+{
+   uint32_t count = 0;
+   for (int i = 0; i < 32; i++)
+   {
+      if ((val >> i) & 1)
+      {
+         count++;
+      }
+   }
+   return count;
+}
+
+// Reverse byte order
+uint32_t reverseBytes(uint32_t val)
+{
+   return ((val & 0x000000FF) << 24) | ((val & 0x0000FF00) << 8) | ((val & 0x00FF0000) >> 8) |
+          ((val & 0xFF000000) >> 24);
+}
+
+// Update negative (bit 3) and zero (bit 2) flags based on ALU result
+void updateALUFlags(uint32_t &fr, uint32_t result)
+{
+   uint32_t n = (result >> 31) & 1;
+   uint32_t z = (result == 0) ? 1 : 0;
+   fr = (fr & 0x3) | (n << 3) | (z << 2);
 }
 
 } // namespace
@@ -88,346 +103,532 @@ inline uint32_t ftoiw(float f)
 void Cpu::load(const Program &p)
 {
    progSize = p.size();
-   prog.assign(progSize + 1, Decoded{});
-   for (uint32_t i = 0; i < progSize; ++i)
-      if (p.filled[i])
-         prog[i] = decode(p.words[i]);
+   progWords = p.words;
+   progFilled = p.filled;
 }
 
 Stop run(Cpu &c, uint64_t budget)
 {
-   uint32_t *const R = c.R;
-   const Decoded *const P = c.prog.data();
-   uint64_t *const cnt = c.count;
-   uint32_t pc = c.pc;
-   uint32_t fr = c.fr;
-
-   auto done = [&](Stop s)
+   while (budget > 0)
    {
-      c.pc = pc;
-      c.fr = fr;
-      return s;
-   };
-   auto trap = [&](const char *msg, uint32_t a)
-   {
-      c.fault = msg;
-      c.faultAddr = a;
-      return done(Stop::Fault);
-   };
-   // n and z flags from an ALU result
-#define SET_NZ(r) (fr = (fr & 3u) | (((r) >> 28) & 8u) | ((r) == 0 ? 4u : 0u))
-#define CHECK_PC(t)                                                                                \
-   if ((t) >= c.progSize)                                                                          \
-   return trap("jump target outside the program", (t))
-#define EA(I)                                                                                      \
-   uint32_t ea = R[(I).s1] + static_cast<uint32_t>((I).imm);                                       \
-   if (ea > Memory::MAX_ADDR)                                                                      \
-   return trap("data address out of range", ea)
-
-   while (budget)
-   {
-      --budget;
-      const Decoded &I = P[pc];
-      ++cnt[static_cast<int>(I.op)];
-      switch (I.op)
+      if (c.pc >= c.progSize || !c.progFilled[c.pc])
       {
-      // ---------------- Other ----------------
+         c.fault = "illegal instruction";
+         c.faultAddr = c.pc;
+         return Stop::Fault;
+      }
+
+      uint32_t word = c.progWords[c.pc];
+      uint32_t opcode = fOpcode(word);
+      Op op = opFromOpcode(opcode);
+      if (op == Op::ILLEGAL)
+      {
+         c.fault = "illegal instruction";
+         c.faultAddr = c.pc;
+         return Stop::Fault;
+      }
+
+      budget--;
+      c.count[static_cast<int>(op)]++;
+
+      // Decode instruction fields
+      uint32_t rs1 = fRs1(word);
+      uint32_t rs2 = fRs2(word); // also rt
+      uint32_t rd = fRd(word);
+      uint32_t shamt = fShamt(word);
+      int32_t simm = static_cast<int16_t>(fImm16(word));
+      uint32_t target26 = fTarget26(word);
+
+      switch (op)
+      {
+      // --- Other ---
       case Op::CLZ:
-         R[I.d] = static_cast<uint32_t>(std::countl_zero(R[I.s1]));
-         ++pc;
+         c.setReg(rd, countLeadingZeros(c.R[rs1]));
+         c.pc++;
          break;
       case Op::CNTT0:
-         R[I.d] = static_cast<uint32_t>(std::countr_zero(R[I.s1]));
-         ++pc;
+         c.setReg(rd, countTrailingZeros(c.R[rs1]));
+         c.pc++;
          break;
       case Op::POP:
-         R[I.d] = static_cast<uint32_t>(std::popcount(R[I.s1]));
-         ++pc;
+         c.setReg(rd, popCount(c.R[rs1]));
+         c.pc++;
          break;
       case Op::BYTR:
-         R[I.d] = __builtin_bswap32(R[I.s1]);
-         ++pc;
+         c.setReg(rd, reverseBytes(c.R[rs1]));
+         c.pc++;
          break;
       case Op::SEXTD:
-         R[I.d] =
-             static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(R[I.s1] & 0xFFFF)));
-         ++pc;
+      {
+         int16_t low16 = static_cast<int16_t>(c.R[rs1] & 0xFFFF);
+         c.setReg(rd, static_cast<uint32_t>(static_cast<int32_t>(low16)));
+         c.pc++;
          break;
+      }
       case Op::NOP:
-         ++pc;
+         c.pc++;
          break;
 
-      // ---------------- Memory ----------------
+      // --- Memory ---
       case Op::LD:
-      case Op::FLW:
       {
-         EA(I);
-         R[I.d] = c.mem.read(ea);
-         ++pc;
+         uint32_t ea = c.R[rs1] + static_cast<uint32_t>(simm);
+         if (ea > Memory::MAX_ADDR)
+         {
+            c.fault = "data address out of range";
+            c.faultAddr = ea;
+            return Stop::Fault;
+         }
+         c.setReg(rs2, c.mem.read(ea)); // rt is rs2
+         c.pc++;
          break;
       }
       case Op::ST:
-      case Op::FSW:
       {
-         EA(I);
-         c.mem.write(ea, R[I.s2]);
-         ++pc;
+         uint32_t ea = c.R[rs1] + static_cast<uint32_t>(simm);
+         if (ea > Memory::MAX_ADDR)
+         {
+            c.fault = "data address out of range";
+            c.faultAddr = ea;
+            return Stop::Fault;
+         }
+         c.mem.write(ea, c.R[rs2]); // rt is stored
+         c.pc++;
          break;
       }
       case Op::MOV:
-         R[I.d] = R[I.s1];
-         ++pc;
+         c.setReg(rs2, c.R[rs1]);
+         c.pc++;
          break;
       case Op::LDR:
-         R[I.d] = static_cast<uint32_t>(I.imm);
-         ++pc;
+         c.setReg(rs2, static_cast<uint32_t>(simm));
+         c.pc++;
          break;
 
-      // ---------------- ALU ----------------
+      // --- ALU ---
       case Op::ADD:
       {
-         uint32_t r = R[I.s1] + R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] + c.R[rs2];
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::SUB:
       {
-         uint32_t r = R[I.s1] - R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] - c.R[rs2];
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::RSB:
       {
-         uint32_t r = R[I.s2] - R[I.s1];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs2] - c.R[rs1];
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::INC:
       {
-         uint32_t r = R[I.s1] + 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] + 1;
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::DEC:
       {
-         uint32_t r = R[I.s1] - 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] - 1;
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::RS:
       {
-         uint32_t r = R[I.s1] >> 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] >> 1;
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::LS:
       {
-         uint32_t r = R[I.s1] << 1;
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] << 1;
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::AND:
       {
-         uint32_t r = R[I.s1] & R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] & c.R[rs2];
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::OR:
       {
-         uint32_t r = R[I.s1] | R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] | c.R[rs2];
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::NAND:
       {
-         uint32_t r = ~(R[I.s1] & R[I.s2]);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = ~(c.R[rs1] & c.R[rs2]);
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::NOR:
       {
-         uint32_t r = ~(R[I.s1] | R[I.s2]);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = ~(c.R[rs1] | c.R[rs2]);
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::XOR:
       {
-         uint32_t r = R[I.s1] ^ R[I.s2];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] ^ c.R[rs2];
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::NOT:
       {
-         uint32_t r = ~R[I.s1];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = ~c.R[rs1];
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::ADDI:
       {
-         uint32_t r = R[I.s1] + static_cast<uint32_t>(I.imm);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] + static_cast<uint32_t>(simm);
+         c.setReg(rs2, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::SUBI:
       {
-         uint32_t r = R[I.s1] - static_cast<uint32_t>(I.imm);
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = c.R[rs1] - static_cast<uint32_t>(simm);
+         c.setReg(rs2, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
       case Op::SFLIP:
       {
-         uint32_t r = 0u - R[I.s1];
-         R[I.d] = r;
-         SET_NZ(r);
-         ++pc;
+         uint32_t res = static_cast<uint32_t>(-static_cast<int32_t>(c.R[rs1]));
+         c.setReg(rd, res);
+         updateALUFlags(c.fr, res);
+         c.pc++;
          break;
       }
 
-      // ---------------- Floating point (shared register file) ----------------
+      // --- Floating Point ---
+      case Op::FLW:
+      {
+         uint32_t ea = c.R[rs1] + static_cast<uint32_t>(simm);
+         if (ea > Memory::MAX_ADDR)
+         {
+            c.fault = "data address out of range";
+            c.faultAddr = ea;
+            return Stop::Fault;
+         }
+         c.setReg(rs2, c.mem.read(ea));
+         c.pc++;
+         break;
+      }
+      case Op::FSW:
+      {
+         uint32_t ea = c.R[rs1] + static_cast<uint32_t>(simm);
+         if (ea > Memory::MAX_ADDR)
+         {
+            c.fault = "data address out of range";
+            c.faultAddr = ea;
+            return Stop::Fault;
+         }
+         c.mem.write(ea, c.R[rs2]);
+         c.pc++;
+         break;
+      }
       case Op::FADD:
-         R[I.d] = u32(f32(R[I.s1]) + f32(R[I.s2]));
-         ++pc;
+      {
+         float f = uintToFloat(c.R[rs1]) + uintToFloat(c.R[rs2]);
+         c.setReg(rd, floatToUint(f));
+         c.pc++;
          break;
+      }
       case Op::FSUB:
-         R[I.d] = u32(f32(R[I.s1]) - f32(R[I.s2]));
-         ++pc;
+      {
+         float f = uintToFloat(c.R[rs1]) - uintToFloat(c.R[rs2]);
+         c.setReg(rd, floatToUint(f));
+         c.pc++;
          break;
+      }
       case Op::FMULT:
-         R[I.d] = u32(f32(R[I.s1]) * f32(R[I.s2]));
-         ++pc;
+      {
+         float f = uintToFloat(c.R[rs1]) * uintToFloat(c.R[rs2]);
+         c.setReg(rd, floatToUint(f));
+         c.pc++;
          break;
+      }
       case Op::FDIV:
-         R[I.d] = u32(f32(R[I.s1]) / f32(R[I.s2]));
-         ++pc;
+      {
+         float f = uintToFloat(c.R[rs1]) / uintToFloat(c.R[rs2]);
+         c.setReg(rd, floatToUint(f));
+         c.pc++;
          break;
+      }
       case Op::FFMA:
-         R[I.d] = u32(std::fmaf(f32(R[I.s1]), f32(R[I.s2]), f32(R[I.s3])));
-         ++pc;
+      {
+         float f = std::fma(uintToFloat(c.R[rs1]), uintToFloat(c.R[rs2]), uintToFloat(c.R[shamt]));
+         c.setReg(rd, floatToUint(f));
+         c.pc++;
          break;
+      }
       case Op::FSQRT:
-         R[I.d] = u32(std::sqrt(f32(R[I.s1])));
-         ++pc;
+      {
+         float f = std::sqrt(uintToFloat(c.R[rs1]));
+         c.setReg(rd, floatToUint(f));
+         c.pc++;
          break;
+      }
       case Op::FNEG:
-         R[I.d] = R[I.s1] ^ 0x80000000u;
-         ++pc;
+         c.setReg(rd, c.R[rs1] ^ 0x80000000u);
+         c.pc++;
          break;
       case Op::FABS:
-         R[I.d] = R[I.s1] & 0x7FFFFFFFu;
-         ++pc;
+         c.setReg(rd, c.R[rs1] & 0x7FFFFFFFu);
+         c.pc++;
          break;
       case Op::FLT:
-         fr = (fr & ~2u) | (f32(R[I.s1]) < f32(R[I.s2]) ? 2u : 0u);
-         ++pc;
+      {
+         float a = uintToFloat(c.R[rs1]);
+         float b = uintToFloat(c.R[rs2]);
+         c.fr = (c.fr & ~2u) | ((a < b) ? 2u : 0u);
+         c.pc++;
          break;
+      }
       case Op::FEQ:
-         fr = (fr & ~1u) | (f32(R[I.s1]) == f32(R[I.s2]) ? 1u : 0u);
-         ++pc;
+      {
+         float a = uintToFloat(c.R[rs1]);
+         float b = uintToFloat(c.R[rs2]);
+         c.fr = (c.fr & ~1u) | ((a == b) ? 1u : 0u);
+         c.pc++;
          break;
+      }
       case Op::FMAX:
       {
-         float a = f32(R[I.s1]), b = f32(R[I.s2]);
-         R[I.d] = a > b ? R[I.s1] : R[I.s2];
-         ++pc;
+         float a = uintToFloat(c.R[rs1]);
+         float b = uintToFloat(c.R[rs2]);
+         float r = (a > b) ? a : b;
+         c.setReg(rd, floatToUint(r));
+         c.pc++;
          break;
       }
       case Op::FTOIW:
-         R[I.d] = ftoiw(f32(R[I.s1]));
-         ++pc;
+         c.setReg(rd, floatToIntWord(uintToFloat(c.R[rs1])));
+         c.pc++;
          break;
       case Op::IWTOF:
-         R[I.d] = u32(static_cast<float>(static_cast<int32_t>(R[I.s1])));
-         ++pc;
+      {
+         float f = static_cast<float>(static_cast<int32_t>(c.R[rs1]));
+         c.setReg(rd, floatToUint(f));
+         c.pc++;
          break;
+      }
       case Op::FMOV:
-         R[I.d] = R[I.s1];
-         ++pc;
+         c.setReg(rd, c.R[rs1]);
+         c.pc++;
          break;
 
-         // ---------------- Control ----------------
-#define BRANCH(cond)                                                                               \
-   if (cond)                                                                                       \
-   {                                                                                               \
-      pc = static_cast<uint32_t>(I.imm);                                                           \
-   }                                                                                               \
-   else                                                                                            \
-   {                                                                                               \
-      ++pc;                                                                                        \
-   }                                                                                               \
-   break;
+      // --- Control ---
       case Op::BEQ:
-         BRANCH(R[I.s1] == R[I.s2])
-      case Op::BNE:
-         BRANCH(R[I.s1] != R[I.s2])
-      case Op::BLT:
-         BRANCH(static_cast<int32_t>(R[I.s1]) < static_cast<int32_t>(R[I.s2]))
-      case Op::BLE:
-         BRANCH(static_cast<int32_t>(R[I.s1]) <= static_cast<int32_t>(R[I.s2]))
-      case Op::BGT:
-         BRANCH(static_cast<int32_t>(R[I.s1]) > static_cast<int32_t>(R[I.s2]))
-      case Op::BGE:
-         BRANCH(static_cast<int32_t>(R[I.s1]) >= static_cast<int32_t>(R[I.s2]))
-#undef BRANCH
-      case Op::JUMP:
-         c.sr = pc + 1;
-         pc = static_cast<uint32_t>(I.imm);
+      {
+         int32_t v1 = static_cast<int32_t>(c.R[rs1]);
+         int32_t v2 = static_cast<int32_t>(c.R[rs2]);
+         if (v1 == v2)
+         {
+            uint32_t target = fImm16(word);
+            if (target >= c.progSize)
+            {
+               c.fault = "jump target outside the program";
+               c.faultAddr = target;
+               return Stop::Fault;
+            }
+            c.pc = target;
+         }
+         else
+         {
+            c.pc++;
+         }
          break;
+      }
+      case Op::BLT:
+      {
+         int32_t v1 = static_cast<int32_t>(c.R[rs1]);
+         int32_t v2 = static_cast<int32_t>(c.R[rs2]);
+         if (v1 < v2)
+         {
+            uint32_t target = fImm16(word);
+            if (target >= c.progSize)
+            {
+               c.fault = "jump target outside the program";
+               c.faultAddr = target;
+               return Stop::Fault;
+            }
+            c.pc = target;
+         }
+         else
+         {
+            c.pc++;
+         }
+         break;
+      }
+      case Op::BLE:
+      {
+         int32_t v1 = static_cast<int32_t>(c.R[rs1]);
+         int32_t v2 = static_cast<int32_t>(c.R[rs2]);
+         if (v1 <= v2)
+         {
+            uint32_t target = fImm16(word);
+            if (target >= c.progSize)
+            {
+               c.fault = "jump target outside the program";
+               c.faultAddr = target;
+               return Stop::Fault;
+            }
+            c.pc = target;
+         }
+         else
+         {
+            c.pc++;
+         }
+         break;
+      }
+      case Op::BGT:
+      {
+         int32_t v1 = static_cast<int32_t>(c.R[rs1]);
+         int32_t v2 = static_cast<int32_t>(c.R[rs2]);
+         if (v1 > v2)
+         {
+            uint32_t target = fImm16(word);
+            if (target >= c.progSize)
+            {
+               c.fault = "jump target outside the program";
+               c.faultAddr = target;
+               return Stop::Fault;
+            }
+            c.pc = target;
+         }
+         else
+         {
+            c.pc++;
+         }
+         break;
+      }
+      case Op::BGE:
+      {
+         int32_t v1 = static_cast<int32_t>(c.R[rs1]);
+         int32_t v2 = static_cast<int32_t>(c.R[rs2]);
+         if (v1 >= v2)
+         {
+            uint32_t target = fImm16(word);
+            if (target >= c.progSize)
+            {
+               c.fault = "jump target outside the program";
+               c.faultAddr = target;
+               return Stop::Fault;
+            }
+            c.pc = target;
+         }
+         else
+         {
+            c.pc++;
+         }
+         break;
+      }
+      case Op::BNE:
+      {
+         int32_t v1 = static_cast<int32_t>(c.R[rs1]);
+         int32_t v2 = static_cast<int32_t>(c.R[rs2]);
+         if (v1 != v2)
+         {
+            uint32_t target = fImm16(word);
+            if (target >= c.progSize)
+            {
+               c.fault = "jump target outside the program";
+               c.faultAddr = target;
+               return Stop::Fault;
+            }
+            c.pc = target;
+         }
+         else
+         {
+            c.pc++;
+         }
+         break;
+      }
+      case Op::JUMP:
+      {
+         uint32_t target = target26;
+         if (target >= c.progSize)
+         {
+            c.fault = "jump target outside the program";
+            c.faultAddr = target;
+            return Stop::Fault;
+         }
+         c.sr = c.pc + 1;
+         c.pc = target;
+         break;
+      }
       case Op::JUMPR:
       {
-         uint32_t t = R[I.s1];
-         CHECK_PC(t);
-         c.sr = pc + 1;
-         pc = t;
+         uint32_t target = c.R[rs1];
+         if (target >= c.progSize)
+         {
+            c.fault = "jump target outside the program";
+            c.faultAddr = target;
+            return Stop::Fault;
+         }
+         c.sr = c.pc + 1;
+         c.pc = target;
          break;
       }
       case Op::JLINK:
       {
-         uint32_t t = R[I.s1];
-         CHECK_PC(t);
-         R[I.d] = pc + 1;
-         c.sr = pc + 1;
-         pc = t;
+         uint32_t target = c.R[rs1];
+         if (target >= c.progSize)
+         {
+            c.fault = "jump target outside the program";
+            c.faultAddr = target;
+            return Stop::Fault;
+         }
+         c.setReg(rs2, c.pc + 1); // Save link in rt (rs2)
+         c.sr = c.pc + 1;
+         c.pc = target;
          break;
       }
       case Op::HALT:
-         return done(Stop::Halted);
+         return Stop::Halted;
 
       case Op::ILLEGAL:
-         return trap("illegal instruction / PC outside program", pc);
+         c.fault = "illegal instruction";
+         c.faultAddr = c.pc;
+         return Stop::Fault;
       }
    }
-   return done(Stop::Budget);
-#undef SET_NZ
-#undef CHECK_PC
-#undef EA
+
+   return Stop::Budget;
 }
