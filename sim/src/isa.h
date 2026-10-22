@@ -31,7 +31,6 @@ enum class Shape : uint8_t
    RD_RS1_RS2_RS3, // FFMA rd, rs1, rs2, rs3
    RS1_RS2,        // FLT rs1, rs2 | FEQ rs1, rs2
    RT_RS1_IMM,     // LD, ST, FLW, FSW, ADDI, SUBI
-   RT_RS1,         // MOV rt, rs1
    RT_IMM,         // LDR rt, imm16
    BR,             // Branch: BEQ rs1, rt, target
    TGT,            // JUMP target26

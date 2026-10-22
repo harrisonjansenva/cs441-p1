@@ -15,7 +15,7 @@ const InstrDesc ISA[NUM_OPS] = {// Other (0x00 - 0x07)
                                 // Memory (0x08 - 0x0F)
                                 {"LD", 0x08, Fmt::I, Shape::RT_RS1_IMM, Cls::Memory},
                                 {"ST", 0x0A, Fmt::I, Shape::RT_RS1_IMM, Cls::Memory},
-                                {"MOV", 0x0C, Fmt::I, Shape::RT_RS1, Cls::Memory},
+                                {"MOV", 0x0C, Fmt::I, Shape::RD_RS1, Cls::Memory},
                                 {"LDR", 0x0D, Fmt::I, Shape::RT_IMM, Cls::Memory},
 
                                 // ALU (0x10 - 0x1F)
@@ -151,8 +151,11 @@ std::string disassemble(uint32_t w)
       std::snprintf(b, sizeof(b), "%s R%u, R%u, R%u", d.name, fRd(w), fRs1(w), fRs2(w));
       break;
    case Shape::RD_RS1:
-      std::snprintf(b, sizeof(b), "%s R%u, R%u", d.name, fRd(w), fRs1(w));
+   {
+      uint32_t dest = (d.fmt == Fmt::I) ? fRs2(w) : fRd(w);
+      std::snprintf(b, sizeof(b), "%s R%u, R%u", d.name, dest, fRs1(w));
       break;
+   }
    case Shape::RD_RS1_RS2_RS3:
       std::snprintf(b, sizeof(b), "%s R%u, R%u, R%u, R%u", d.name, fRd(w), fRs1(w), fRs2(w),
                     fShamt(w));
@@ -162,9 +165,6 @@ std::string disassemble(uint32_t w)
       break;
    case Shape::RT_RS1_IMM:
       std::snprintf(b, sizeof(b), "%s R%u, R%u, %d", d.name, fRs2(w), fRs1(w), simm);
-      break;
-   case Shape::RT_RS1:
-      std::snprintf(b, sizeof(b), "%s R%u, R%u", d.name, fRs2(w), fRs1(w));
       break;
    case Shape::RT_IMM:
       std::snprintf(b, sizeof(b), "%s R%u, %d", d.name, fRs2(w), simm);

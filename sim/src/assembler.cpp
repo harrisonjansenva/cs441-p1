@@ -129,7 +129,6 @@ int getExpectedOperandCount(Shape s)
       return 1;
    case Shape::RD_RS1:
    case Shape::RS1_RS2:
-   case Shape::RT_RS1:
    case Shape::RT_IMM:
    case Shape::RS1_RT:
       return 2;
@@ -395,14 +394,21 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
 
       case Shape::RD_RS1:
       {
-         uint32_t rd = 0, rs1 = 0;
-         if (!parseRegArg(args[0], rd, err) || !parseRegArg(args[1], rs1, err))
+         uint32_t dest = 0, rs1 = 0;
+         if (!parseRegArg(args[0], dest, err) || !parseRegArg(args[1], rs1, err))
          {
             addError(item.line, err);
          }
          else
          {
-            word |= (rs1 << 21) | (rd << 11);
+            if (d.fmt == Fmt::I)
+            {
+               word |= (rs1 << 21) | (dest << 16);
+            }
+            else
+            {
+               word |= (rs1 << 21) | (dest << 11);
+            }
          }
          break;
       }
@@ -447,20 +453,6 @@ std::vector<std::string> assemble(const std::string &path, Program &out)
          else
          {
             word |= (rs1 << 21) | (rt << 16) | imm;
-         }
-         break;
-      }
-
-      case Shape::RT_RS1:
-      {
-         uint32_t rt = 0, rs1 = 0;
-         if (!parseRegArg(args[0], rt, err) || !parseRegArg(args[1], rs1, err))
-         {
-            addError(item.line, err);
-         }
-         else
-         {
-            word |= (rs1 << 21) | (rt << 16);
          }
          break;
       }
