@@ -106,6 +106,9 @@ I-type `opcode rs1 rt imm16`; J-type `opcode target26`. Opcodes are the 6-bit co
 (memory and counts, including mixed step sizes); every instruction executes in `benchmark1`; MAXFINDER edge cases
 (max first/last, all negative, −0.0, single element); assembler and `.mem` errors; R0/R1/CLZ(0) semantics.
 
+`sh tests/bench_big.sh [N]` (default N = 1,000,000) generates a random array of N integers and of N floats,
+runs both MAXFINDERs, checks the maximum against Python's, and reports load time vs execution time.
+
 ## Benchmarks (in `../benchmarks`)
 
 The handout asks for concrete addresses instead of labels, so the `.asm` files here contain none.
