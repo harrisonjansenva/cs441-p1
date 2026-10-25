@@ -1,19 +1,51 @@
-// assembler.h - two-pass assembler: text -> real 32-bit instruction words.
 #pragma once
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @file take our text and turn it into 32 bit instruction words
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
+#include "text.h"
+
+namespace Simulator
+{
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief an assembled program, indexed by instruction address (PC).
+////////////////////////////////////////////////////////////////////////////////////////////////////
 struct Program
 {
-   std::vector<uint32_t> words; // indexed by instruction address (PC)
-   std::vector<uint8_t> filled; // 1 if an instruction was assembled there
-   std::vector<int> srcLine;    // source line per address (0 if unfilled)
-   uint32_t size() const
+   struct Entry
    {
-      return static_cast<uint32_t>(words.size());
+      std::uint32_t word{0};  // the encoded instruction
+      std::size_t srcLine{0}; // the line of the source file it came from
+      bool filled{false};     // true if an instruction was assembled at this address
+   };
+
+   std::vector<Entry> entries;
+
+   std::uint32_t size() const
+   {
+      return static_cast<std::uint32_t>(entries.size());
+   }
+
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   /// @brief true if there is an instruction at the given address
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   bool isFilled(std::uint32_t addr) const
+   {
+      return addr < size() && entries[addr].filled;
    }
 };
 
-// Returns the list of error messages ("file:line: message"); empty on success.
-std::vector<std::string> assemble(const std::string &path, Program &out);
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief assemble a file into a program.
+/// @param path: the assembly file to read.
+/// @param out: filled with the assembled program on success.
+/// @return a list of the applicable error messages, will be empty on success.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+Errors assemble(const std::string &path, Program &out);
+
+} // namespace Simulator

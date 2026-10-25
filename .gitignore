@@ -1,3 +1,6 @@
 sim/build/
 .DS_Store
 benchmarks/*.instrCount
+
+# Ignore test work
+/other-sim

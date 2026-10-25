@@ -1,13 +1,20 @@
 #pragma once
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @file Representation of our CPU processing our ISA.
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#include <cstddef>
 #include <cstdint>
-#include <string>
-#include <vector>
 
 #include "assembler.h"
 #include "isa.h"
 #include "memory.h"
 
+namespace Simulator
+{
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief the reason the CPU stopped executing instructions.
+////////////////////////////////////////////////////////////////////////////////////////////////////
 enum class Stop
 {
    Halted,
@@ -15,26 +22,25 @@ enum class Stop
    Fault
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief the architectural state of our CPU.
+////////////////////////////////////////////////////////////////////////////////////////////////////
 struct Cpu
 {
    // 32 architectural registers: R0 = 0, R1 = 1, R2-R31 general purpose
-   uint32_t R[32] = {};
+   std::uint32_t R[32]{};
 
-   uint32_t pc = 0; // Program counter
-   uint32_t fr = 0; // Flag register: bit 3 = n, bit 2 = z, bit 1 = l, bit 0 = e
-   uint32_t sr = 0; // Scope register: PC+1 on jumps
+   std::uint32_t pc{0}; // Program counter
+   std::uint32_t fr{0}; // Flag register: bit 3 = n, bit 2 = z, bit 1 = l, bit 0 = e
+   std::uint32_t sr{0}; // Scope register: PC+1 on jumps
 
-   uint64_t count[NUM_OPS] = {};
+   std::uint64_t count[NUM_OPS]{}; // how many times each instruction was executed
 
-   const char *fault = nullptr;
-   uint32_t faultAddr = 0;
+   const char *fault{nullptr};
+   std::uint32_t faultAddr{0};
 
-   // Instruction memory
-   std::vector<uint32_t> progWords;
-   std::vector<uint8_t> progFilled;
-   uint32_t progSize = 0;
-
-   Memory mem;
+   Program program; // instruction memory
+   Memory mem;      // data memory
 
    Cpu()
    {
@@ -42,21 +48,24 @@ struct Cpu
       R[1] = 1;
    }
 
-   // Writes to R0 and R1 are ignored
-   void setReg(uint32_t reg, uint32_t val)
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   /// @brief write a register. Writes to R0 and R1 are ignored since they are constants.
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   void setReg(std::uint32_t reg, std::uint32_t val)
    {
-      if (reg >= 2 && reg < 32)
+      if (2 <= reg && 32 > reg)
       {
          R[reg] = val;
       }
    }
 
-   void load(const Program &p);
-
-   uint64_t total() const
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   /// @brief the total number of instructions executed so far.
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   std::uint64_t total() const
    {
-      uint64_t sum = 0;
-      for (int i = 0; i < NUM_OPS; ++i)
+      std::uint64_t sum{0};
+      for (std::size_t i{0}; i < NUM_OPS; ++i)
       {
          sum += count[i];
       }
@@ -64,5 +73,12 @@ struct Cpu
    }
 };
 
-// Execute instructions up to the given budget
-Stop run(Cpu &cpu, uint64_t budget);
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief Execute instructions up to the given budget
+/// @param cpu: the CPU to run, with its program already loaded.
+/// @param budget: the most instructions we are willing to execute.
+/// @return why we stopped.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+Stop run(Cpu &cpu, std::uint64_t budget);
+
+} // namespace Simulator

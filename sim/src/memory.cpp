@@ -1,219 +1,120 @@
 #include "memory.h"
 
-#include <algorithm>
-#include <cctype>
-#include <cstdio>
+#include <cstddef>
 #include <fstream>
+#include <iomanip>
+#include <string>
 #include <vector>
 
-namespace
-{
+#include "isa.h"
 
-// Trim whitespace from start and end of string
-std::string trim(const std::string &s)
+namespace Simulator
 {
-   size_t start = 0;
-   while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])))
-   {
-      start++;
-   }
-   size_t end = s.size();
-   while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])))
-   {
-      end--;
-   }
-   return s.substr(start, end - start);
-}
+Errors Memory::loadMem(const std::string &path)
+{
+   std::vector<std::string> lines;
 
-// Strip comment (# or ;) from line
-std::string stripComment(const std::string &s)
-{
-   size_t pos = s.find_first_of("#;");
-   if (pos == std::string::npos)
+   if (!readLines(path, lines))
    {
-      return s;
-   }
-   return s.substr(0, pos);
-}
-
-// Parse a hex value (e.g., "0x1234" or "1234")
-bool parseHex(const std::string &token, uint64_t &result)
-{
-   size_t i = 0;
-   if (token.size() > 2 && token[0] == '0' && (token[1] == 'x' || token[1] == 'X'))
-   {
-      i = 2;
-   }
-   if (i >= token.size() || token.size() - i > 16)
-   {
-      return false;
+      return {"cannot open mem file '" + path + "'"};
    }
 
-   uint64_t val = 0;
-   for (; i < token.size(); i++)
+   // we added a title as a comment on the first line of each of our mem files, so keep it
+   m_title.clear();
+   if (!lines.empty())
    {
-      char c = std::tolower(static_cast<unsigned char>(token[i]));
-      int digit = 0;
-      if (c >= '0' && c <= '9')
-      {
-         digit = c - '0';
-      }
-      else if (c >= 'a' && c <= 'f')
-      {
-         digit = c - 'a' + 10;
-      }
-      else
-      {
-         return false;
-      }
-      val = (val << 4) | static_cast<uint64_t>(digit);
-   }
-   result = val;
-   return true;
-}
+      std::string first{trim(lines.front())};
 
-// Split line by commas and spaces
-std::vector<std::string> splitTokens(const std::string &s)
-{
-   std::vector<std::string> tokens;
-   std::string current;
-   for (char c : s)
-   {
-      if (c == ',' || std::isspace(static_cast<unsigned char>(c)))
+      if (!first.empty() && ('#' == first[0] || ';' == first[0]))
       {
-         if (!current.empty())
-         {
-            tokens.push_back(current);
-            current.clear();
-         }
-      }
-      else
-      {
-         current += c;
+         std::size_t start{first.find_first_not_of("#; \t")};
+         m_title = (std::string::npos == start) ? "" : first.substr(start);
       }
    }
-   if (!current.empty())
+
+   bool hasHeader{false};
+
+   for (std::size_t i{0}; i < lines.size(); i++)
    {
-      tokens.push_back(current);
-   }
-   return tokens;
-}
+      std::size_t lineNum{i + 1};
+      std::string body{trim(stripComment(lines[i]))};
 
-} // namespace
-
-std::string Memory::loadMemFile(const std::string &path)
-{
-   std::ifstream file(path);
-   if (!file.is_open())
-   {
-      return "cannot open memory file '" + path + "'";
-   }
-
-   std::string line;
-   int lineNum = 0;
-   bool hasHeader = false;
-   bool firstLine = true;
-
-   while (std::getline(file, line))
-   {
-      lineNum++;
-
-      // First line is the benchmark name comment
-      if (firstLine)
-      {
-         firstLine = false;
-         std::string t = trim(line);
-         while (!t.empty() && (t[0] == '#' || t[0] == ';'))
-         {
-            t = trim(t.substr(1));
-         }
-         title_ = t;
-
-         if (!trim(line).empty() && trim(line)[0] != '#' && trim(line)[0] != ';')
-         {
-            title_.clear();
-         }
-         else
-         {
-            continue;
-         }
-      }
-
-      std::string body = trim(stripComment(line));
       if (body.empty())
       {
          continue;
       }
 
-      std::vector<std::string> tok = splitTokens(body);
+      std::vector<std::string> tokens{tokenize(body)};
+      std::int64_t first{0};
+      std::int64_t second{0};
 
-      // Header check: "26, 32"
+      // per the project requirements, the first line of content holds the address and word sizes.
       if (!hasHeader)
       {
-         if (tok.size() != 2 || !std::all_of(tok[0].begin(), tok[0].end(), ::isdigit) ||
-             !std::all_of(tok[1].begin(), tok[1].end(), ::isdigit))
+         if (2 != tokens.size() || !parseInteger(tokens[0], 10, first) ||
+             !parseInteger(tokens[1], 10, second))
          {
-            return path + ":" + std::to_string(lineNum) +
-                   ": expected header '<address bits>, <bits per word>'";
+            return {
+                formatError(path, lineNum, "expected header '<address bits>, <bits per word>'")};
          }
 
-         uint64_t addrBits = std::stoull(tok[0]);
-         uint64_t wordBits = std::stoull(tok[1]);
-         if (addrBits != ADDR_BITS || wordBits != 32)
+         if (ADDR_BITS != first || WORD_BITS != second)
          {
-            return path + ":" + std::to_string(lineNum) +
-                   ": this simulator requires header '26, 32' (got '" + body + "')";
+            return {formatError(path, lineNum,
+                                "this simulator requires header '" + std::to_string(ADDR_BITS) +
+                                    ", " + std::to_string(WORD_BITS) + "' (got '" + body + "')")};
          }
          hasHeader = true;
          continue;
       }
 
-      // Memory entry: address, value
-      uint64_t addr = 0;
-      uint64_t val = 0;
-      if (tok.size() != 2 || !parseHex(tok[0], addr) || !parseHex(tok[1], val))
+      // every other line is an address and the value to store there, both in hex
+      if (2 != tokens.size() || !parseInteger(tokens[0], 16, first) ||
+          !parseInteger(tokens[1], 16, second))
       {
-         return path + ":" + std::to_string(lineNum) +
-                ": expected '<hex address>, <hex value>', got '" + body + "'";
+         return {formatError(path, lineNum,
+                             "expected '<hex address>, <hex value>', got '" + body + "'")};
       }
 
-      if (addr > MAX_ADDR)
+      if (0 > first || MAX_ADDR < first)
       {
-         return path + ":" + std::to_string(lineNum) + ": address " + tok[0] + " exceeds 0x3FFFFFF";
+         return {formatError(path, lineNum, "address " + tokens[0] + " is outside of memory")};
       }
-      if (val > 0xFFFFFFFFull)
+      if (0 > second || 0xFFFFFFFFll < second)
       {
-         return path + ":" + std::to_string(lineNum) + ": value " + tok[1] +
-                " does not fit in 32 bits";
+         return {formatError(path, lineNum, "value " + tokens[1] + " does not fit in 32 bits")};
       }
 
-      write(static_cast<uint32_t>(addr), static_cast<uint32_t>(val));
+      write(static_cast<std::uint32_t>(first), static_cast<std::uint32_t>(second));
    }
 
    if (!hasHeader)
    {
-      return path + ": missing '26, 32' header line";
+      return {path + ": missing header line for address and word sizes"};
    }
 
-   return "";
+   return {};
 }
 
-std::string Memory::writeMemOut(const std::string &path) const
+Errors Memory::writeMem(const std::string &path) const
 {
-   FILE *f = std::fopen(path.c_str(), "w");
-   if (!f)
+   std::ofstream file{path};
+
+   if (!file.is_open())
    {
-      return "cannot write '" + path + "'";
+      return {"could not write '" + path + "'"};
    }
 
-   std::fprintf(f, "# %s\n26, 32\n", title_.empty() ? "final memory" : title_.c_str());
+   file << "# " << (m_title.empty() ? "final memory" : m_title) << '\n'
+        << ADDR_BITS << ", " << WORD_BITS << '\n';
 
-   // Map keys are automatically in ascending address order
-   for (const auto &entry : storage_)
+   file << std::hex << std::uppercase << std::setfill('0');
+   for (const auto &entry : m_storage)
    {
-      std::fprintf(f, "0x%07X, 0x%08X\n", entry.first, entry.second);
+      file << "0x" << std::setw(7) << entry.first << ", 0x" << std::setw(8) << entry.second << '\n';
    }
 
-   std::fclose(f);
-   return "";
+   return {};
 }
+
+} // namespace Simulator

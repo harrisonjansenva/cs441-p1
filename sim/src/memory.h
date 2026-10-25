@@ -1,44 +1,71 @@
 #pragma once
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @file representation for our memory space in our simulator.
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include <cstdint>
 #include <map>
 #include <string>
 
-// Word-addressable memory (26-bit address space).
-// Uses a map to store addresses that have been loaded or written to,
-// so uninitialized memory reads as 0 without allocating 256MB.
+#include "text.h"
+
+namespace Simulator
+{
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief representation for the memory structure in our simulator. It is word addressable, and
+/// only stores the addresses that have been loaded or written to so that unwritten memory reads as
+/// 0 without allocating the whole address space.
+////////////////////////////////////////////////////////////////////////////////////////////////////
 class Memory
 {
  public:
-   static constexpr uint32_t ADDR_BITS = 26;
-   static constexpr uint32_t MAX_ADDR = (1u << ADDR_BITS) - 1; // 0x3FFFFFF
-
    Memory() = default;
 
-   // Reads a word from memory. Returns 0 if address was not written.
-   uint32_t read(uint32_t addr) const
+   ~Memory() = default;
+
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   /// @brief read a word from memory.
+   /// @param addr: the memory address we are looking for
+   /// @return the word at the memory address, or 0 if unallocated.
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   std::uint32_t read(std::uint32_t addr) const
    {
-      auto it = storage_.find(addr);
-      if (it != storage_.end())
+      auto it{m_storage.find(addr)};
+
+      if (m_storage.end() != it)
       {
          return it->second;
       }
+
       return 0;
    }
 
-   // Writes a word to memory and records the address.
-   void write(uint32_t addr, uint32_t value)
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   /// @brief write a word into a memory address
+   /// @param addr: the address in which we would like to write a word
+   /// @param value: the content we wish to write at that memory address.
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   void write(std::uint32_t addr, std::uint32_t value)
    {
-      storage_[addr] = value;
+      m_storage[addr] = value;
    }
 
-   // Parse a .mem file. Returns empty string on success, else an error message.
-   std::string loadMemFile(const std::string &path);
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   /// @brief load in a provided memory file
+   /// @param path: the path to our .mem file
+   /// @return the problem with the file, empty if it was loaded successfully.
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   Errors loadMem(const std::string &path);
 
-   // Writes final memory contents sorted by address to .mem.out.
-   std::string writeMemOut(const std::string &path) const;
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   /// @brief write the final memory content to a .mem.out file.
+   /// @param path: the path to the file we wish to write to.
+   /// @return the problem writing the file, empty if it was written successfully.
+   ////////////////////////////////////////////////////////////////////////////////////////////////////
+   Errors writeMem(const std::string &path) const;
 
  private:
-   std::map<uint32_t, uint32_t> storage_;
-   std::string title_;
+   std::map<std::uint32_t, std::uint32_t> m_storage;
+   std::string m_title;
 };
+} // namespace Simulator

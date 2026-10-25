@@ -1,20 +1,29 @@
-// isaSim - Instruction level simulator for CS 441 Project 1.
-// Usage: isaSim -<r|s> <assembly file> <memory file> [-d] [--max-instr N]
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @file isaSim - Instruction level simulator for CS 441 Project 1.
+/// Usage: isaSim -<r|s> <assembly file> <memory file> [-d] [--max-instr N]
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
 #include "assembler.h"
 #include "cpu.h"
 #include "isa.h"
+#include "text.h"
+
+using namespace Simulator;
 
 namespace
 {
+constexpr std::uint64_t DEFAULT_MAX_INSTR{2000000000ull};
 
-constexpr uint64_t DEFAULT_MAX_INSTR = 2000000000ull;
-
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief tell the user how to run the simulator.
+////////////////////////////////////////////////////////////////////////////////////////////////////
 void printUsage()
 {
    std::fputs(
@@ -26,39 +35,31 @@ void printUsage()
        stderr);
 }
 
-// Extract file base name from path (stripping directory)
-std::string getBaseName(const std::string &path)
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief print each error on its own line to stderr.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+void printErrors(const Errors &errors)
 {
-   size_t slash = path.find_last_of("/\\");
-   if (slash == std::string::npos)
+   for (const std::string &err : errors)
    {
-      return path;
+      std::fprintf(stderr, "%s\n", err.c_str());
    }
-   return path.substr(slash + 1);
 }
 
-// Strip extension from file name
-std::string stripExtension(const std::string &name)
-{
-   size_t dot = name.find_last_of('.');
-   if (dot == std::string::npos || dot == 0)
-   {
-      return name;
-   }
-   return name.substr(0, dot);
-}
-
-// Print architectural state during step mode
-void printState(const Cpu &c, const Program &p, const std::string &executed)
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief Print architectural state during step mode
+////////////////////////////////////////////////////////////////////////////////////////////////////
+void printState(const Cpu &c, const std::string &executed)
 {
    if (!executed.empty())
    {
       std::printf("executed: %s\n", executed.c_str());
    }
 
-   if (c.pc < c.progSize && p.filled[c.pc])
+   if (c.program.isFilled(c.pc))
    {
-      std::printf("PC = 0x%07X   next: %s\n", c.pc, disassemble(p.words[c.pc]).c_str());
+      std::printf("PC = 0x%07X   next: %s\n", c.pc,
+                  disassemble(c.program.entries[c.pc].word).c_str());
    }
    else
    {
@@ -68,29 +69,31 @@ void printState(const Cpu &c, const Program &p, const std::string &executed)
    std::printf("FR = 0x%X (n=%u z=%u l=%u e=%u)   SR = 0x%07X\n", c.fr, (c.fr >> 3) & 1,
                (c.fr >> 2) & 1, (c.fr >> 1) & 1, c.fr & 1, c.sr);
 
-   for (int i = 0; i < 32; ++i)
+   for (int i{0}; i < 32; ++i)
    {
-      std::printf("R%-2d=%08X%s", i, c.R[i], (i % 4 == 3) ? "\n" : "  ");
+      std::printf("R%-2d=%08X%s", i, c.R[i], (3 == i % 4) ? "\n" : "  ");
    }
    std::printf("Total instructions executed: %llu\n", static_cast<unsigned long long>(c.total()));
 }
 
-// Format instruction count table grouped by instruction class
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief Format instruction count table grouped by instruction type
+////////////////////////////////////////////////////////////////////////////////////////////////////
 std::string buildCountsReport(const Cpu &c)
 {
    std::string report;
    char buffer[128];
-   Cls currentClass = Cls::Control;
-   bool isFirst = true;
+   Instr_type currentType{Instr_type::Control};
+   bool isFirst{true};
 
-   for (int i = 0; i < NUM_OPS; ++i)
+   for (std::size_t i{0}; i < NUM_OPS; ++i)
    {
-      const InstrDesc &d = ISA[i];
-      if (isFirst || d.cls != currentClass)
+      const InstrDesc &d{ISA[i]};
+      if (isFirst || d.type != currentType)
       {
-         currentClass = d.cls;
+         currentType = d.type;
          isFirst = false;
-         std::snprintf(buffer, sizeof(buffer), "# %s\n", className(currentClass));
+         std::snprintf(buffer, sizeof(buffer), "# %s\n", typeName(currentType));
          report += buffer;
       }
       std::snprintf(buffer, sizeof(buffer), "%s: %llu\n", d.name,
@@ -104,22 +107,22 @@ std::string buildCountsReport(const Cpu &c)
    return report;
 }
 
-} // namespace
+} // anonymous namespace
 
 int main(int argc, char **argv)
 {
-   bool stepMode = false;
-   bool haveMode = false;
-   bool dumpDisasm = false;
-   uint64_t maxInstructions = DEFAULT_MAX_INSTR;
+   bool stepMode{false};
+   bool haveMode{false};
+   bool dumpDisasm{false};
+   std::uint64_t maxInstructions{DEFAULT_MAX_INSTR};
    std::string asmPath;
    std::string memPath;
-   int positionalArgs = 0;
+   int positionalArgs{0};
 
-   for (int i = 1; i < argc; ++i)
+   for (int i{1}; i < argc; ++i)
    {
-      std::string arg = argv[i];
-      if (arg == "-r" || arg == "-s")
+      std::string arg{argv[i]};
+      if ("-r" == arg || "-s" == arg)
       {
          if (haveMode)
          {
@@ -127,13 +130,13 @@ int main(int argc, char **argv)
             return 2;
          }
          haveMode = true;
-         stepMode = (arg == "-s");
+         stepMode = ("-s" == arg);
       }
-      else if (arg == "-d")
+      else if ("-d" == arg)
       {
          dumpDisasm = true;
       }
-      else if (arg == "--max-instr")
+      else if ("--max-instr" == arg)
       {
          if (i + 1 >= argc)
          {
@@ -143,18 +146,18 @@ int main(int argc, char **argv)
          i++;
          maxInstructions = std::strtoull(argv[i], nullptr, 0);
       }
-      else if (!arg.empty() && arg[0] == '-')
+      else if (!arg.empty() && '-' == arg[0])
       {
          std::fprintf(stderr, "isaSim: unknown option '%s'\n", arg.c_str());
          printUsage();
          return 2;
       }
-      else if (positionalArgs == 0)
+      else if (0 == positionalArgs)
       {
          asmPath = arg;
          positionalArgs++;
       }
-      else if (positionalArgs == 1)
+      else if (1 == positionalArgs)
       {
          memPath = arg;
          positionalArgs++;
@@ -166,47 +169,44 @@ int main(int argc, char **argv)
       }
    }
 
-   if (!haveMode || positionalArgs != 2)
+   if (!haveMode || 2 != positionalArgs)
    {
       printUsage();
       return 2;
    }
 
+   Cpu cpu;
+
    // Assemble the source file
-   Program prog;
-   std::vector<std::string> assembleErrors = assemble(asmPath, prog);
+   Errors assembleErrors{assemble(asmPath, cpu.program)};
    if (!assembleErrors.empty())
    {
-      for (const std::string &err : assembleErrors)
-      {
-         std::fprintf(stderr, "%s\n", err.c_str());
-      }
+      printErrors(assembleErrors);
       std::fprintf(stderr, "isaSim: assembly failed (%zu error%s)\n", assembleErrors.size(),
-                   assembleErrors.size() == 1 ? "" : "s");
+                   (1 == assembleErrors.size()) ? "" : "s");
       return 1;
    }
 
-   Cpu cpu;
-   std::string memError = cpu.mem.loadMemFile(memPath);
-   if (!memError.empty())
+   Errors memErrors{cpu.mem.loadMem(memPath)};
+   if (!memErrors.empty())
    {
-      std::fprintf(stderr, "isaSim: %s\n", memError.c_str());
+      printErrors(memErrors);
       return 1;
    }
-   cpu.load(prog);
 
    if (dumpDisasm)
    {
-      for (uint32_t a = 0; a < prog.size(); ++a)
+      for (std::uint32_t a{0}; a < cpu.program.size(); ++a)
       {
-         if (prog.filled[a])
+         if (cpu.program.isFilled(a))
          {
-            std::printf("0x%07X: %08X  %s\n", a, prog.words[a], disassemble(prog.words[a]).c_str());
+            std::uint32_t word{cpu.program.entries[a].word};
+            std::printf("0x%07X: %08X  %s\n", a, word, disassemble(word).c_str());
          }
       }
    }
 
-   Stop stopReason = Stop::Budget;
+   Stop stopReason{Stop::Budget};
 
    if (!stepMode)
    {
@@ -217,10 +217,10 @@ int main(int argc, char **argv)
    {
       // Step-by-step interactive mode
       std::printf("Step mode. Enter = 1 step, N = N steps, c = continue to end, q = quit.\n");
-      printState(cpu, prog, "");
+      printState(cpu, "");
 
-      uint64_t remainingBudget = maxInstructions;
-      bool quit = false;
+      std::uint64_t remainingBudget{maxInstructions};
+      bool quit{false};
 
       while (true)
       {
@@ -228,23 +228,23 @@ int main(int argc, char **argv)
          std::fflush(stdout);
 
          std::string line;
-         bool eof = !std::getline(std::cin, line);
-         uint64_t stepsToRun = 1;
+         bool eof{!std::getline(std::cin, line)};
+         std::uint64_t stepsToRun{1};
 
-         if (eof || line == "c" || line == "C")
+         if (eof || "c" == line || "C" == line)
          {
             stepsToRun = remainingBudget;
          }
-         else if (line == "q" || line == "Q")
+         else if ("q" == line || "Q" == line)
          {
             quit = true;
             break;
          }
          else if (!line.empty())
          {
-            char *end = nullptr;
-            unsigned long long v = std::strtoull(line.c_str(), &end, 0);
-            if (end == line.c_str() || v == 0)
+            char *end{nullptr};
+            unsigned long long v{std::strtoull(line.c_str(), &end, 0)};
+            if (end == line.c_str() || 0 == v)
             {
                std::printf("?\n");
                continue;
@@ -257,27 +257,27 @@ int main(int argc, char **argv)
             stepsToRun = remainingBudget;
          }
 
-         uint32_t pcBefore = cpu.pc;
-         uint64_t countBefore = cpu.total();
+         std::uint32_t pcBefore{cpu.pc};
+         std::uint64_t countBefore{cpu.total()};
          stopReason = run(cpu, stepsToRun);
 
-         uint64_t executedCount = cpu.total() - countBefore;
+         std::uint64_t executedCount{cpu.total() - countBefore};
          remainingBudget -= executedCount;
 
          std::string executedDesc;
-         if (executedCount == 1 && pcBefore < prog.size() && prog.filled[pcBefore])
+         if (1 == executedCount && cpu.program.isFilled(pcBefore))
          {
-            executedDesc = disassemble(prog.words[pcBefore]);
+            executedDesc = disassemble(cpu.program.entries[pcBefore].word);
          }
-         else if (executedCount > 1)
+         else if (1 < executedCount)
          {
             executedDesc = std::to_string(executedCount) + " instructions";
          }
 
          std::printf("\n");
-         printState(cpu, prog, executedDesc);
+         printState(cpu, executedDesc);
 
-         if (stopReason != Stop::Budget || remainingBudget == 0 || eof)
+         if (Stop::Budget != stopReason || 0 == remainingBudget || eof)
          {
             break;
          }
@@ -289,12 +289,12 @@ int main(int argc, char **argv)
       }
    }
 
-   int exitCode = 0;
-   if (stopReason == Stop::Halted)
+   int exitCode{0};
+   if (Stop::Halted == stopReason)
    {
       std::printf("\nHALT reached.\n");
    }
-   else if (stopReason == Stop::Fault)
+   else if (Stop::Fault == stopReason)
    {
       std::fprintf(stderr, "\nisaSim: runtime fault at PC=0x%07X: %s (0x%X)\n", cpu.pc, cpu.fault,
                    cpu.faultAddr);
@@ -308,31 +308,30 @@ int main(int argc, char **argv)
    }
 
    // Write output reports
-   std::string report = buildCountsReport(cpu);
+   std::string report{buildCountsReport(cpu)};
    std::printf("\nInstruction counts:\n%s", report.c_str());
 
-   std::string countPath = stripExtension(getBaseName(asmPath)) + ".instrCount";
-   FILE *countFile = std::fopen(countPath.c_str(), "w");
-   if (countFile)
+   std::string countPath{std::filesystem::path{asmPath}.stem().string() + ".instrCount"};
+   std::ofstream countFile{countPath};
+   if (countFile.is_open())
    {
-      std::fputs(report.c_str(), countFile);
-      std::fclose(countFile);
+      countFile << report;
    }
    else
    {
       std::fprintf(stderr, "isaSim: cannot write %s\n", countPath.c_str());
-      if (exitCode == 0)
+      if (0 == exitCode)
       {
          exitCode = 1;
       }
    }
 
-   std::string outPath = getBaseName(memPath) + ".out";
-   std::string writeErr = cpu.mem.writeMemOut(outPath);
-   if (!writeErr.empty())
+   std::string outPath{std::filesystem::path{memPath}.filename().string() + ".out"};
+   Errors writeErrors{cpu.mem.writeMem(outPath)};
+   if (!writeErrors.empty())
    {
-      std::fprintf(stderr, "isaSim: %s\n", writeErr.c_str());
-      if (exitCode == 0)
+      printErrors(writeErrors);
+      if (0 == exitCode)
       {
          exitCode = 1;
       }

@@ -6,7 +6,7 @@ CXXFLAGS ?= -O3
 CXXFLAGS += -std=$(STD) -Wall -Wextra -ffp-contract=off
 LDLIBS   += -lm
 
-SRC := src/main.cpp src/isa.cpp src/memory.cpp src/assembler.cpp src/cpu.cpp
+SRC := src/main.cpp src/text.cpp src/isa.cpp src/memory.cpp src/assembler.cpp src/cpu.cpp
 OBJ := $(SRC:src/%.cpp=build/%.o)
 BIN := build/isaSim_bin
 
