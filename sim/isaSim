@@ -1,9 +1,37 @@
 #!/bin/sh
 # isaSim launcher: builds the simulator on first use, then runs it.
-#   usage: isaSim -<r|s> <assembly file> <memory file>
+#   usage: isaSim [-r|-s] (<assembly file> <memory file> | --int | --fp | --b1 | --asm FILE --mem FILE) [-d] [--max-instr N]
 dir=$(cd "$(dirname "$0")" && pwd)
+bench="$(dirname "$dir")/benchmarks"
+
+mode=-r; suite=; asm=; mem=
+
+while [ $# -gt 0 ]; do
+    case $1 in 
+        -r|-s)      mode=$1 ;;
+        --int)      suite=maxfinder-int ;;
+        --fp)       suite=maxfinder-fp ;;
+        --b1)       suite=benchmark1 ;;
+        --asm)      asm=$2; shift ;;
+        --mem)      mem=$2; shift ;;
+        --)         shift; break ;;
+        *)          break ;;
+    esac
+    shift
+done
+
+if [ -n "$suite" ]; then
+    : "${asm:=$bench/$suite.asm}"
+    : "${mem:=$bench/$suite.mem}"
+fi
+
+if [ -n "$asm" ] || [ -n "$mem" ]; then
+    [ -f "$asm" ] && [ -f "$mem" ] || { echo "isaSim: need both an asm and mem file (got '$asm', '$mem')" >&2; exit 2; }
+    set -- "$asm" "$mem" "$@"           # remaining args are -d, --max-instr, etc.
+fi
+
 bin="$dir/build/isaSim_bin"
 if [ ! -x "$bin" ]; then
     make -s -C "$dir" >&2 || { echo "isaSim: build failed (needs g++ with C++20, try: make STD=c++17)" >&2; exit 1; }
 fi
-exec "$bin" "$@"
+exec "$bin" "$mode" "$@"

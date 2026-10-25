@@ -10,20 +10,35 @@ Simulates our 32-bit, word-addressable ISA. Tested with g++ 11 (the version on o
 
 ## Build and run
 
+This code was written on macOS 27 and Mint Linux. It is written to be compatible with the C++20 standard. It is compatible with C++17 and newer.
+
 ```
 $ cd sim
 $ make                 # builds build/isaSim_bin  (use `make STD=c++17` on an older compiler)
-$ ./isaSim -r <assembly file> <memory file>     # run straight through
-$ ./isaSim -s <assembly file> <memory file>     # step by step
 ```
 
 `./isaSim` is a small launcher script that builds the simulator on first use, so it also works
 on a fresh checkout without running `make` first.
 
-Usage: `isaSim -<r|s> <assembly file> <memory file> [-d] [--max-instr N]`
+```
+$ ./isaSim -r <assembly file> <memory file>     # run straight through
+$ ./isaSim -s <assembly file> <memory file>     # step by step
+$ ./isaSim --fp                                 # run a provided benchmark (--int, --fp or --b1)
+$ ./isaSim -s --b1 --mem my.mem                 # suite with a custom memory file
+```
+
+Usage: `isaSim [-r|-s] (<assembly file> <memory file> | --<suite> | --asm FILE --mem FILE) [-d] [--max-instr N]`
+
+The suite flags run our provided benchmarks without you typing paths. The launcher resolves
+`../benchmarks/<name>.asm` and `.mem` for you. `--asm` and `--mem` override either file, so
+`--int --mem my.mem` runs the int MAXFINDER on your data. If neither `-r` nor `-s` is given, `-r` is used.
 
 | Flag | Meaning |
 |---|---|
+| `--int` | `maxfinder-int` benchmark. |
+| `--fp` | `maxfinder-fp` benchmark. |
+| `--b1` | `benchmark1`. |
+| `--asm FILE`, `--mem FILE` | Use this assembly / memory file instead of the suite's (equivalent to the positional form). Both files must exist. |
 | `-r` | Run from PC 0 to `HALT`. |
 | `-s` | Step mode. After every step prints PC, the instruction just executed, the next instruction, FR, SR, **all of R0–R31**, and the total instructions executed so far. Prompt: **Enter** = one step, **N** = run N steps, **c** = continue to the end, **q** = quit (outputs are still written). |
 | `-d` | Also print the assembled program: address, 32-bit encoding, disassembly. |
@@ -38,7 +53,9 @@ At the end of either mode the simulator prints the number of times each instruct
   Lists every address named in the input `.mem` plus every address stored to during the run (even if the value is 0),
   sorted, as `0xADDRESS, 0xVALUE`. Any address not listed is 0.
 
-Exit status: 0 on `HALT`; 1 assembly/file error; 3 runtime fault; 4 stopped by `--max-instr` or `q`.
+Both files are written to the current directory, wherever you run `isaSim` from.
+
+Exit status: 0 on `HALT`; 1 assembly/file error; 2 usage error (including a missing `--asm`/`--mem` file); 3 runtime fault; 4 stopped by `--max-instr` or `q`.
 
 ## File formats
 
@@ -68,7 +85,7 @@ See [this link](docs/ISA.md) for the instruction syntax.
 
 ## Design
 
-* `src/isa.h` holds one table (`ISA_LIST`) of all instructions: mnemonic, opcode, format, operand shape, class.
+* `src/isa.h` holds one table (`SIM_OP_LIST`) of all instructions: mnemonic, opcode, format, operand shape, class.
   The assembler, encoder, decoder, disassembler, and the per-instruction counters are all generated from it.
 * `src/assembler.cpp` is a two-pass assembler that produces real 32-bit words (range-checked), so the encodings
   in the spec are actually exercised. Words are then decoded **once** into a flat array of `Decoded` records.
@@ -85,7 +102,8 @@ See [this link](docs/ISA.md) for the instruction syntax.
 * `-s` equals `-r`
 * every instruction executes in `benchmark1`; 
 * MAXFINDER edge cases (max first/last, all negative, −0.0, single element); 
-* assembler and `.mem` errors; 
+* labeled sources behave exactly like the resolved (address-only) benchmarks;
+* assembler and `.mem` errors, and `--max-instr` stopping an infinite loop; 
 * R0/R1/CLZ(0) semantics.
 
 ## AI Use

@@ -1,6 +1,12 @@
 sim/build/
 .DS_Store
-benchmarks/*.instrCount
+*.instrCount
 
 # Ignore test work
+
 /other-sim
+
+# Ignore output files in main directory
+*.mem.out
+!benchmarks/*.mem.out
+
