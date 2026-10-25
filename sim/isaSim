@@ -1,9 +1,0 @@
-#!/bin/sh
-# isaSim launcher: builds the simulator on first use, then runs it.
-#   usage: isaSim -<r|s> <assembly file> <memory file>
-dir=$(cd "$(dirname "$0")" && pwd)
-bin="$dir/build/isaSim_bin"
-if [ ! -x "$bin" ]; then
-    make -s -C "$dir" >&2 || { echo "isaSim: build failed (needs g++ with C++20, try: make STD=c++17)" >&2; exit 1; }
-fi
-exec "$bin" "$@"
